@@ -1,0 +1,52 @@
+# Zhiwo dossier layout — the schema is data, not code.
+# This file declares which sections exist and their sensitivity.
+# Adding a section is a data change; no code needs to change.
+
+core_budget_tokens: 4000
+
+sections:
+  - id: identity
+    title: 基本情况
+    path: about/identity.md
+    axis: about
+    sensitivity: normal
+  - id: health
+    title: 身体
+    path: about/health.md
+    axis: about
+    sensitivity: high
+  - id: relations
+    title: 重要的人
+    path: about/relations.md
+    axis: about
+    sensitivity: high
+  - id: finance
+    title: 财务约束
+    path: about/finance.md
+    axis: about
+    sensitivity: high
+  - id: values
+    title: 价值观与决策偏好
+    path: about/values.md
+    axis: about
+    sensitivity: normal
+  - id: career
+    title: 学业与职业
+    path: about/career.md
+    axis: about
+    sensitivity: normal
+  - id: long-term
+    title: 长期目标
+    path: goals/long-term.md
+    axis: goals
+    sensitivity: normal
+  - id: current
+    title: 当前在办
+    path: goals/current.md
+    axis: goals
+    sensitivity: normal
+  - id: journal
+    title: 日常流水
+    path: journal/
+    axis: journal
+    sensitivity: normal

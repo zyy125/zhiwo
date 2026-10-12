@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+*.egg-info/
+
+# Environment / secrets
+.env
+.env.*
+
+# A real dossier must never be committed.
+# If you init one inside a checkout, it stays local.
+.me/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

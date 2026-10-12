@@ -1,0 +1,52 @@
+# CLAUDE.md — project context for Claude Code
+
+## What this is
+
+Zhiwo (知我, "knows me"): a local-first personal dossier that any authorized
+AI reads as context. Currently **pre-MVP**: this repo holds the philosophy
+(READMEs) and the data contract (SPEC.md). Code comes after the contract.
+
+**Language conventions:** code, comments, issues, commit messages — English.
+READMEs — bilingual (README.md English, README.zh.md Chinese).
+
+## Planned architecture (7 layers)
+
+| Layer | Module | Role | LLM |
+|---|---|---|---|
+| L0 | `store` | file I/O + git; the only code that knows where data lives | no |
+| L1 | `schema` | reads profile.yaml, validates structure | no |
+| L2 | `extract` | free text + core_view → Patch[] | **yes** |
+| L3 | `merge` | Patch[] × dossier → new dossier + changelog; pure & structural | no |
+| L4 | `recall` | question → context to inject | optional |
+| L5 | `distill` | journal → core profile, under token budget | **yes** |
+| L6 | `iface` | CLI / MCP server / export | no |
+
+Key property: **LLM call sites are the only cracks.** Anything touching a
+model takes and returns pure data (patches, JSON) — mockable, recordable,
+swappable. That is what "model-agnostic" means in code.
+
+## Hard rules (violating any of these is a bug, not a style issue)
+
+1. **Schema is data, not code.** Section layout lives in `profile.yaml`.
+   Never hardcode it.
+2. **A fact lives in exactly one file.** Cross-references are links
+   (`[[f_id]]`), never copies.
+3. **Merge never calls a model.** Supersede decisions (semantic conflict
+   judgment) live in extract, which always receives core_view.
+4. **Patches without verbatim `evidence` are rejected.** No exceptions.
+5. **Never rewrite `locked` (human-edited) facts.** Flag conflicts instead.
+6. **Importers only emit raw notes** for the extract/merge pipeline; they
+   never write the dossier directly.
+7. **Agents must not change the semantics of `profile.yaml` or SPEC.md**
+   without explicit user approval — the contract is the product.
+
+## Guarantees the code must preserve
+
+Plain-file transparency (`me diff`, `me why`), human-edit authority
+(auto-lock), history via git (every merge = one commit), hallucination
+border control (evidence), section-level sensitivity filtering for readers.
+
+## Current phase
+
+Phase 0 — contract first. Next: SPEC review → v0.2 MVP
+(L0/L1/L2/L3-append-first/L4-inject-core/L6-CLI).
