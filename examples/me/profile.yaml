@@ -49,4 +49,6 @@ sections:
     title: 日常流水
     path: journal/
     axis: journal
-    sensitivity: normal
+    # 原始话语流里躺着高敏感事实的 evidence 原文，
+    # 分区过滤在源头会失效 → journal 默认 high，系统永不降级（SPEC §5）。
+    sensitivity: high
