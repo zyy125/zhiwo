@@ -50,7 +50,12 @@ Rules:
   of understanding happens in `about/` and `goals/`, never in the journal.
 - **`changelog/` is append-only.** Merge, reconcile, and distill only add
   files here; entries are never edited or removed. This is where evidence and
-  provenance live permanently (§3).
+  provenance live permanently (§3). Filenames carry seconds
+  (`YYYY-MM-DDThhmmss.yaml`), because two merges can complete inside one
+  minute — a capture followed by a confirmation, for instance. If a name
+  already exists, a numeric suffix is appended (`…-2.yaml`): a merge never
+  overwrites a changelog entry. The merge id inside the file is the filename
+  stem.
 - **`.index/` is derived.** It is fully rebuildable from the markdown files
   plus the changelog (`me index rebuild`). No code may treat it as a source
   of truth; losing it loses nothing. A real dossier's `.gitignore` contains
@@ -105,8 +110,10 @@ identity, relations, and flags — everything else is derived:
 Marker grammar: `<!-- <id> [supersedes:<id>] [superseded-by:<id>] [locked] [pending] -->`
 
 - Status is computed from the marker: `superseded-by` → superseded;
-  `pending` → pending; otherwise active. `archived` never appears in a file —
-  archived facts exist only in the changelog and index (§4, §3-compress).
+  `pending` → pending; otherwise active. `pending` takes precedence — a
+  `supersedes` edge on a pending fact is inert until confirmation (§2.3).
+  `archived` never appears in a file — archived facts exist only in the
+  changelog and index (§4, §3-compress).
 - **Superseded facts stay in the file**, struck through, with a
   `superseded-by` marker. "放弃读博" is meaningless without "曾经想读博" —
   the trail of how you changed is visible where you read it, not hidden in a
@@ -144,7 +151,24 @@ quoted correctly, understood wrongly, and carrying the false authority of
 - **Deferred supersede.** An inference that contradicts an active fact is
   recorded as a pending supersede: the target fact stays active, the new
   fact stays pending, and the supersede applies only on confirmation.
-  Rejection leaves the original untouched.
+  Rejection leaves the original untouched. The file states this without
+  ambiguity — the *new* fact carries the edge; the target carries nothing
+  until the supersede actually applies:
+
+  ```markdown
+  - 想读博 <!-- f_009 -->                                   # still active
+  - 也许该直接工作 <!-- f_060 supersedes:f_009 pending -->   # pending; edge inert
+  ```
+
+  (`f_009` exists in `examples/me/`; `f_060` is illustrative.)
+
+  A pending fact reads as pending (§2.1), so the edge changes nothing until
+  confirmation. On confirmation, one merge rewrites f_060's marker to
+  `supersedes:f_009` and marks the target
+  `~~…~~ <!-- f_009 superseded-by:f_060 -->`. On rejection, f_060 is archived
+  through the changelog and the target was never touched. The deferred set is
+  therefore reconstructible from the files alone — which is what lets extract
+  see it in `core_view` rather than re-deriving it.
 
 Extract sees the full `core_view` (active + locked + pending facts of
 `about/` + `goals/`) so it does not re-derive inferences already pending.
@@ -193,7 +217,14 @@ Rules:
   source pointer, op, kind, extractor identity, timestamp. Fact files stay
   clean; the audit trail lives in exactly one append-only place.
   (Resolves v0.1 OQ2: evidence is retained — in the changelog, never
-  duplicated onto the fact.)
+  duplicated onto the fact.) What is recorded is the patch **as applied**: it
+  carries the `id` the merger assigned, the resolved `source` pointer, and
+  the resulting status transition. The patch *input* carries no `id` —
+  identity does not exist until the merger assigns it (§2.1), which is part
+  of why merge is the only writer. The changelog is a log of events, not a
+  second copy of state: `f_017` appears there as the subject of a past event,
+  while the markdown line remains the only authority on whether that fact is
+  live today.
 - **Extract sees `core_view` when deciding whether new text supersedes an
   old fact.** Semantic conflict judgment lives in the extractor — it is a
   judgment about meaning, and meaning needs a model.
@@ -353,4 +384,10 @@ indistinguishable from a notes folder.
 - **§6** Budget counts the reader view only; capture never blocks —
   over-budget defers promotions instead; confirmation can trigger distill.
 - **§7** Two new guarantee rows (pending quarantine, journal clearance).
+- **§1 / §2.1 / §2.3 / §3** — three review-pass refinements: changelog
+  filenames carry seconds and never overwrite; a deferred supersede is written
+  as `supersedes:<target> pending` on the *new* fact, the target staying
+  untouched until confirmation; a changelog entry records the patch as
+  applied (with the merger-assigned `id`), making explicit that the changelog
+  is an event log rather than a second copy of state.
 - v0.1's four open questions resolved; four new ones recorded.
