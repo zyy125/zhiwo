@@ -1,0 +1,21 @@
+# 每次 merge 一个文件，目录只追加、永不改写。
+# evidence 与 source 永久保存在这里，事实文件保持干净；
+# `me why f_051` 通过 changelog 解析溯源（SPEC §2.1 / §3）。
+merge: m_2026-10-11T2130
+input: journal/2026-10-11.md
+extractor: mock-v0
+patches:
+  - op: add
+    id: f_051
+    target: about/career.md
+    kind: statement          # 用户原话直接支撑 → active
+    text: 二面反馈：项目深度不够（2026-10-11）
+    evidence: "面试挂了，二面，反馈说项目深度不够。"
+    source: journal/2026-10-11.md#L7
+  - op: add
+    id: f_043
+    target: goals/current.md
+    kind: inference          # 推断（“要补深度”是结论，不是原话）→ pending，
+    text: 根据二面反馈补项目深度（见 [[f_051]]）   # 等 `me review` 确认后才进 reader view
+    evidence: "面试挂了，二面，反馈说项目深度不够。"
+    source: journal/2026-10-11.md#L7
