@@ -71,7 +71,7 @@
 
 这个仓库现在没有任何能跑的代码——这是刻意的。先公开的是产品哲学和数据契约：
 
-- [SPEC.md](SPEC.md) —— 数据契约 v0.1：事实模型、目录结构、写入规则
+- [SPEC.md](SPEC.md) —— 数据契约 v0.2-draft：事实模型、目录结构、写入规则。SPEC 有自己的版本线（见文末 review guide）。
 - [examples/me/](examples/me/) —— 一份合成数据的示例档案
 - [docs/prior-art.md](docs/prior-art.md) —— 对最接近的现有项目的调研，以及这个设计做到了、它们没做到的事
 - [docs/decisions.md](docs/decisions.md) —— 不属于契约的决策记录（D-001：暂不做编辑器集成，id 格式不变）

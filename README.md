@@ -61,7 +61,7 @@ That's not "people in general" anymore. That's you.
 Nothing here runs yet — deliberately. This repository currently contains:
 
 - [README.zh.md](README.zh.md) — the full philosophy, in Chinese
-- [SPEC.md](SPEC.md) — the data contract, v0.1: the fact model, the directory layout, the merge rules
+- [SPEC.md](SPEC.md) — the data contract, v0.2-draft: the fact model, the directory layout, the merge rules. The SPEC is versioned on its own line (review guide at the bottom).
 - [examples/me/](examples/me/) — a synthetic sample dossier demonstrating the format
 - [docs/prior-art.md](docs/prior-art.md) — a survey of the closest existing projects, and what this design does that they don't
 - [docs/decisions.md](docs/decisions.md) — dated records of decisions that are not part of the contract (D-001: editor integration deferred, id format unchanged)
