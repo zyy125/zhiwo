@@ -35,6 +35,17 @@ It won't make decisions for you. It gives you a line of reasoning that is actual
 - Not another note app. Notes organize knowledge; Zhiwo organizes *you*.
 - Not a habit you must build. The only required action is: say something when you feel like it.
 
+## How this differs from what exists
+
+Local-first, markdown-based AI memory is not an empty space — [Basic Memory](https://github.com/basicmachines-co/basic-memory) and others share the stance that plain files are the authority. A survey of the closest existing projects (notes in [docs/prior-art.md](docs/prior-art.md)) found that the things this design insists on are exactly the things none of them do:
+
+- **A hard token budget, declared in the data.** Every memory system surveyed treats its size limit as an advisory hint to the model. Here the budget is data, and the code enforces it.
+- **Supersede never deletes.** When a belief changes, the old fact stays visible, struck through, in the same file — because "I decided not to do a PhD" is meaningless without "I once wanted to." Letta keeps evicted text in a separate searchable database with no link between the two; langmem deletes outright.
+- **Over budget, new writes wait — capture never blocks.** Other systems make room by evicting old content. Here, saying something always succeeds; promotion into the core profile waits in a queue.
+- **Verbatim evidence for every fact.** No project surveyed attaches a per-fact pointer back to the exact sentence that produced it. Every fact here resolves through an append-only changelog to its source line. And because a text editor is a first-class input, a hand-edited file is authoritative — not corruption.
+
+*Scope: "none of them do" means "not found among the projects surveyed in October 2026." Method, versions read, and what each project does have are in [docs/prior-art.md](docs/prior-art.md).*
+
 ## A day with it
 
 Morning commute: `me "Slept six hours. Interview this afternoon."` — noted.
@@ -52,6 +63,8 @@ Nothing here runs yet — deliberately. This repository currently contains:
 - [README.zh.md](README.zh.md) — the full philosophy, in Chinese
 - [SPEC.md](SPEC.md) — the data contract, v0.1: the fact model, the directory layout, the merge rules
 - [examples/me/](examples/me/) — a synthetic sample dossier demonstrating the format
+- [docs/prior-art.md](docs/prior-art.md) — a survey of the closest existing projects, and what this design does that they don't
+- [docs/decisions.md](docs/decisions.md) — dated records of decisions that are not part of the contract (D-001: editor integration deferred, id format unchanged)
 
 We are building the contract before the code, because in this product **the schema is the hard part**. If you find a flaw in the SPEC, you've contributed more than a hundred lines of code ever could. **Issues welcome — harsh ones especially.**
 
