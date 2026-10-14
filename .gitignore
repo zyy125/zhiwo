@@ -14,6 +14,9 @@ dist/
 # If you init one inside a checkout, it stays local.
 .me/
 
+# Claude Code personal settings stay per-developer
+.claude/settings.local.json
+
 # Editors / OS
 .DS_Store
 .idea/
