@@ -46,6 +46,28 @@ Plain-file transparency (`me diff`, `me why`), human-edit authority
 (auto-lock), history via git (every merge = one commit), hallucination
 border control (evidence), section-level sensitivity filtering for readers.
 
+## Development workflow
+
+### Git discipline
+- One logical change per commit; commit messages in English, imperative
+  subject ≤72 chars.
+- Never end a session with a dirty working tree.
+- Branch per task; open and manage PRs with `gh` (gh pr create / view / checks).
+- Never force-push shared branches; rebase before opening a PR.
+- Commit and push only when the user asks; merging to main always requires
+  approval.
+
+### Token economy
+- Search with Grep/Glob (narrow patterns) before Read; Read only the line
+  range needed, never whole large files.
+- Delegate broad multi-file searches to the Explore agent; keep main context
+  for conclusions, not file dumps.
+- Don't re-read files already in context; use offset/limit on big files.
+- CodeGraph MCP (structural queries instead of grep chains): adopt once the
+  codebase is large enough that multi-hop grep/Read chains dominate —
+  roughly 200+ source files; below that the index costs more context than
+  it saves.
+
 ## Current phase
 
 Phase 0 — contract first. Next: SPEC review → v0.2 MVP
