@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 3.11 腿存在的意义：pyproject 声明 requires-python >=3.11，
+        # 地板必须真的被测过，而不是只写在元数据里（StrEnum 亦需 3.11）。
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      # --locked：pyproject 与 uv.lock 不一致时直接失败，
+      # 锁漂移不可能悄悄合入 main（plan §9 第 1 条）。
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
