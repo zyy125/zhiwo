@@ -150,6 +150,11 @@ def load_profile(path: Path) -> Profile:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise SchemaError(f"cannot read profile {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # UnicodeDecodeError 不是 OSError 的子类，必须单独接住：
+        # 非 UTF-8 的档案（旧编码、编辑器写坏的字节）同样属于"结构读不出来"，
+        # 让上层只需要认识 SchemaError 一种失败。
+        raise SchemaError(f"{path}: not valid UTF-8: {exc}") from exc
     return parse_profile(parse_yaml(text, source=str(path)), source=str(path))
 
 
@@ -176,6 +181,10 @@ def can_read(clearance: Clearance, section: Section) -> bool:
     recall 层的视图规则，不是本函数的规则——``can_read(HIGH, journal)``
     为 True，因为 journal 回想本来就是一项独立的、需要高权限的能力。
     """
-    if section.sensitivity is Sensitivity.HIGH:
-        return clearance is Clearance.HIGH
-    return True
+    if clearance is Clearance.HIGH:
+        return True
+    # 默认拒绝：normal 读者只拿得到**显式标注为 normal** 的分区。
+    # 写成"非 normal 即需高权限"而不是"是 high 才需高权限"，是为了让
+    # 判定偏向失败安全：万一有构造路径绕过了模型校验（sensitivity 为
+    # None），结果落在"读不到"一侧，而不是落在泄漏一侧。
+    return section.sensitivity is Sensitivity.NORMAL

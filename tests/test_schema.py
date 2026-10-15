@@ -131,48 +131,60 @@ def test_missing_profile_file_is_a_schema_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "text"),
+    "text",
     [
-        ("empty file", ""),
-        ("root is scalar", "just a string\n"),
-        ("root is list", "- a\n- b\n"),
-        ("yaml syntax error", "sections: [unclosed\n"),
-        ("python object tag", "core_budget_tokens: !!python/object:os.system\n"),
-        (
-            "duplicate top-level key",
-            "core_budget_tokens: 4000\ncore_budget_tokens: 9000\n",
+        pytest.param("", id="empty-file"),
+        pytest.param("just a string\n", id="root-is-scalar"),
+        pytest.param("- a\n- b\n", id="root-is-list"),
+        pytest.param("sections: [unclosed\n", id="yaml-syntax-error"),
+        pytest.param(
+            "core_budget_tokens: !!python/object:os.system\n",
+            id="python-object-tag-refused",
         ),
-        ("unknown top-level key", "sectons: []\n"),
-        (
-            "journal downgraded",
+        pytest.param(
+            "core_budget_tokens: 4000\ncore_budget_tokens: 9000\n",
+            id="duplicate-top-level-key",
+        ),
+        pytest.param("sectons: []\n", id="unknown-top-level-key"),
+        pytest.param(
             "sections:\n"
             "  - id: journal\n    title: 日常流水\n    path: journal/\n"
             "    axis: journal\n    sensitivity: normal\n",
+            id="journal-downgraded",
         ),
-        (
-            "duplicate section id",
+        pytest.param(
             "sections:\n"
             "  - id: values\n    title: 价值观\n    path: about/values.md\n"
             "    axis: about\n    sensitivity: normal\n"
             "  - id: values\n    title: 重复\n    path: about/other.md\n"
             "    axis: about\n    sensitivity: normal\n",
+            id="duplicate-section-id",
         ),
-        (
-            "missing sensitivity on non-journal section",
+        pytest.param(
             "sections:\n"
             "  - id: health\n    title: 身体\n    path: about/health.md\n    axis: about\n",
+            id="missing-sensitivity-on-non-journal-section",
         ),
     ],
 )
-def test_invalid_profiles_are_rejected(label: str, text: str) -> None:
-    """M1 验收 2：坏 profile 一律拒绝，且消息里指认得出问题所在。
-
-    ``label`` 只是为了让参数化用例在报告里可读。
-    """
+def test_invalid_profiles_are_rejected(text: str) -> None:
+    """M1 验收 2：坏 profile 一律拒绝，且消息以来源开头、指认得出问题所在。"""
     with pytest.raises(SchemaError) as excinfo:
         parse_profile(parse_yaml(text, source="<test>"), source="<test>")
     assert str(excinfo.value).startswith("<test>:")
-    assert label  # 用例标签本身不参与断言
+
+
+def test_non_utf8_profile_is_a_schema_error(tmp_path: Path) -> None:
+    """损坏编码同样归一成 SchemaError（L1 的失败只有一种类型）。
+
+    GB18030/Big5 的旧档案、编辑器写坏的字节都会走到这条路径；
+    若让 UnicodeDecodeError 逃出去，上层就得认识第二种异常——
+    与 schema.py 开头承诺的"fail loud 且只有一种失败"不符。
+    """
+    bad = tmp_path / "profile.yaml"
+    bad.write_bytes("sections:\n  - id: 身体\n".encode("gb18030"))
+    with pytest.raises(SchemaError, match="not valid UTF-8"):
+        load_profile(bad)
 
 
 def test_duplicate_key_error_names_the_line() -> None:
@@ -240,3 +252,20 @@ def test_journal_is_unreadable_at_normal_clearance() -> None:
     # journal 回想是独立的高权限能力，因此 high 读者可以——"journal 不进
     # reader view"是 recall 层的视图规则，不是 can_read 的规则（plan §6）。
     assert can_read(Clearance.HIGH, journal)
+
+
+def test_can_read_fails_closed_on_unvalidated_section() -> None:
+    """判定偏向失败安全：绕过校验构造出的分区（sensitivity 缺失）也应读不到。
+
+    这是防御性用例，写在测试层是为了把"默认拒绝"的意图固定下来：
+    将来若有人把判定改回"是 high 才拦"，这条会立刻红。
+    """
+    bypassed = Section.model_construct(
+        id="health",
+        title="身体",
+        path="about/health.md",
+        axis=Axis.ABOUT,
+        sensitivity=None,
+    )
+    assert not can_read(Clearance.NORMAL, bypassed)
+    assert can_read(Clearance.HIGH, bypassed)
