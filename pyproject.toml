@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zhiwo"
+version = "0.2.0.dev0"
+description = "Zhiwo (知我) — a local-first personal dossier any authorized AI reads as context"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "pydantic>=2.7,<3",
+    "PyYAML>=6.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18",
+    "pytest>=8.4",
+    "ruff>=0.14",
+    "types-PyYAML",
+]
+
+# 说明：src/zhiwo/templates/ 下的 profile.yaml 是随包分发的引导模板
+# （plan §4 把它放在包内）。hatchling 对 packages 指向的目录整棵打包，
+# 因此模板与 py.typed 无需额外的 package-data 配置。
+[tool.hatch.build.targets.wheel]
+packages = ["src/zhiwo"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# 刻意不启用 pydocstyle (D)：本项目要求中文详细注释，其风格约定与
+# pydocstyle 相冲突，注释质量由 review 保证而非 lint。
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+# RUF001/2/3 检查"易混淆 Unicode 字符"（全角逗号、括号等）。本项目注释、
+# 字符串与测试夹具大量使用中文标点，这些检查在中文代码库里必然误报，
+# 故豁免；注释质量同样交由 review 保证。
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# N818 要求异常类名以 Error 结尾，但 errors.py 的五个类名由 plan §4
+# 的模块清单钉死（MergeRefused / LockHeld 是契约词汇，不是笔误）。
+"src/zhiwo/errors.py" = ["N818"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

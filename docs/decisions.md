@@ -65,3 +65,70 @@ deferral" cannot survive without distill in any case. Warn-only degrades the
 budget from a hard gate to a visible signal — the honest MVP posture, and a
 reversible one. Contract-facing carve-out approved by the owner 2026-10-14
 (hard rule 7).
+
+## D-003 — YAML: PyYAML with a duplicate-key-rejecting safe loader
+
+**Date:** 2026-10-15 · **Status:** accepted
+
+**Context.** `profile.yaml` and `changelog/*.yaml` need a parser (M1). No
+prior record chose one; the language choice (pydantic v2) was locked in
+[plan-v0.2.md](plan-v0.2.md) §2 but left the YAML library open.
+
+**Decision.** PyYAML, used through three fixed rules:
+
+1. always `yaml.safe_load` (never `load`/`full_load`) — no arbitrary object
+   construction;
+2. always parse a `str` obtained from `read_text(encoding="utf-8")`, never a
+   file handle (PyYAML falls back to the locale codec on handles, which
+   mangles CJK under a POSIX/C locale — the exact failure the encoding law
+   in plan §4 exists to prevent);
+3. the loader is a `SafeLoader` subclass that raises on duplicate mapping
+   keys, because PyYAML's default is silent last-key-wins and a hand-edited
+   profile with two `sections:` blocks would then lose one silently — a
+   miniature "nothing is ever lost" (SPEC §7) violation.
+
+**Why not ruamel.yaml.** Its distinguishing feature is round-trip,
+comment-preserving *rewriting*. Nothing in the contract rewrites
+`profile.yaml`: comments in it are human documentation, the bootstrap
+template ships as static package data, and the changelog is machine-written
+once and append-only. Paying for a capability the contract forbids needing
+would be the wrong trade.
+
+**Consequences.** If a future feature ever rewrites `profile.yaml` while
+preserving its comments, revisit this. The comment-loss risk is otherwise
+covered by the fact that `me init` copies the template verbatim instead of
+serializing it.
+
+## D-004 — L1 validation is stricter than the SPEC's literal text in four places
+
+**Date:** 2026-10-15 · **Status:** accepted
+
+**Context.** SPEC §1 and §5 describe the shape of `profile.yaml` but not how
+strictly it should be validated. M1 had to decide four points, each stricter
+than a literal reading of the SPEC.
+
+**Decision.** L1 rejects, with `SchemaError`:
+
+1. a non-journal section that omits `sensitivity` — the SPEC says every
+   section *is* marked with a level; defaulting an omission to `normal`
+   would make the quiet default the leak-prone one;
+2. two sections sharing a `path` (in addition to the SPEC's implied unique
+   `id`) — two sections over one file makes sensitivity filtering ambiguous,
+   and §1 says ambiguity is what makes files drift;
+3. an `axis` outside the closed set `about | goals | journal` — the axis
+   drives the §5 journal rules, so a free-form string would be a bypass;
+4. more than one `axis: journal` section — §1 defines the journal as *the*
+   append-only time stream.
+
+**Why.** Each follows from a rationale the SPEC already states (fail loud on
+the profile, anti-ambiguity in the layout, journal-never-downgraded in §5).
+None of them changes contract semantics, denies a document the SPEC allows,
+or touches the on-disk format: they convert silent misconfiguration into a
+loud error. This is not hard-rule-1 territory — the *layout* (which sections
+exist) stays data; what is closed here is contract vocabulary, on the same
+footing as `sensitivity`, `op`, and `kind`.
+
+**Consequences.** A future section type that legitimately needs no
+sensitivity must make that explicit (a named level, not an omission). If a
+fourth axis is ever wanted, it is a contract change (rule 7): the enum
+member and the SPEC edit land together.

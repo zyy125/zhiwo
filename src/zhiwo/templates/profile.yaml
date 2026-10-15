@@ -1,0 +1,69 @@
+# Zhiwo 档案结构声明 — schema 是数据，不是代码（硬规则 1，SPEC §1）。
+#
+# 本文件是 `me init` 的引导模板（随包分发的数据）。它声明了档案里有哪些
+# 分区、各自归属哪条轴、敏感度如何。添加一个分区（比如 family/）是数据变更，
+# 不需要改任何代码——这正是这套设计可演进、可迁移的原因。
+#
+# 分区文件不存在也没关系：声明在先，文件由 merge 前的 reconcile 创建（plan §5 步骤 4）。
+#
+# 本模板与 examples/me/profile.yaml 目前分区一致，但**刻意不互相耦合**：
+# 示例是冻结的契约说明数据（永不改动），模板是活的引导默认值（随版本演进）。
+# 给模板加一个分区而示例不动，是允许的；加分区/改敏感度前请先确认 SPEC §1/§5。
+
+# reader view（about/ + goals/）的 token 预算，SPEC §6 规定初始 4000。
+# MVP 阶段超预算只警告不拦截（plan §2 锁定选择 + D-002）：闸门属于 distill（v0.5）。
+core_budget_tokens: 4000
+
+sections:
+  # --- 轴 1：about/ —— 我是谁（慢变）---
+  - id: identity
+    title: 基本情况
+    path: about/identity.md
+    axis: about
+    sensitivity: normal
+  - id: health
+    title: 身体
+    path: about/health.md
+    axis: about
+    sensitivity: high
+  - id: relations
+    title: 重要的人
+    path: about/relations.md
+    axis: about
+    sensitivity: high
+  - id: finance
+    title: 财务约束
+    path: about/finance.md
+    axis: about
+    sensitivity: high
+  - id: values
+    title: 价值观与决策偏好
+    path: about/values.md
+    axis: about
+    sensitivity: normal
+  - id: career
+    title: 学业与职业
+    path: about/career.md
+    axis: about
+    sensitivity: normal
+
+  # --- 轴 2：goals/ —— 我要去哪（意图）---
+  - id: long-term
+    title: 长期目标
+    path: goals/long-term.md
+    axis: goals
+    sensitivity: normal
+  - id: current
+    title: 当前在办
+    path: goals/current.md
+    axis: goals
+    sensitivity: normal
+
+  # --- 轴 3：journal/ —— 发生了什么（只追加的时间流）---
+  - id: journal
+    title: 日常流水
+    path: journal/
+    axis: journal
+    # 原始话语流里躺着高敏感事实的 evidence 原文，
+    # 分区过滤在源头会失效 → journal 默认 high，系统永不降级（SPEC §5）。
+    sensitivity: high

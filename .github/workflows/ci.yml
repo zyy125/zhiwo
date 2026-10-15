@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 最小权限：这个 workflow 只需要读代码。显式声明后，即便将来某个步骤
+# 引入了第三方 action，它继承到的 token 也只是只读的。
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 3.11 腿存在的意义：pyproject 声明 requires-python >=3.11，
+        # 地板必须真的被测过，而不是只写在元数据里（StrEnum 亦需 3.11）。
+        python-version: ["3.11", "3.12"]
+    env:
+      # 必须显式指定：uv 的解释器优先级是 UV_PYTHON > .python-version，
+      # 而仓库把 .python-version 钉在 3.12。不设这个变量，两条腿都会用
+      # 3.12 跑——矩阵看着是两条，实际只有一条，且 3.11 地板无人验证。
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      # --locked：pyproject 与 uv.lock 不一致时直接失败，
+      # 锁漂移不可能悄悄合入 main（plan §9 第 1 条）。
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
