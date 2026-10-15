@@ -14,6 +14,11 @@ jobs:
         # 3.11 腿存在的意义：pyproject 声明 requires-python >=3.11，
         # 地板必须真的被测过，而不是只写在元数据里（StrEnum 亦需 3.11）。
         python-version: ["3.11", "3.12"]
+    env:
+      # 必须显式指定：uv 的解释器优先级是 UV_PYTHON > .python-version，
+      # 而仓库把 .python-version 钉在 3.12。不设这个变量，两条腿都会用
+      # 3.12 跑——矩阵看着是两条，实际只有一条，且 3.11 地板无人验证。
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
