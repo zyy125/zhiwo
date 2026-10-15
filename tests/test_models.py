@@ -311,6 +311,54 @@ def test_unknown_patch_keys_are_ignored() -> None:
     assert not hasattr(patch, "confidence")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("evidence", ""), ("text", ""), ("source", ""), ("target", "")],
+)
+def test_empty_strings_are_not_accepted_as_present(field: str, value: str) -> None:
+    """空串是"看起来填了"的缺席——尤其 evidence: "" 不可能是逐字引文。
+
+    只查 None 会把这类输入放过去，然后在 M4 变成一条语焉不详的拒绝；
+    硬规则 4 的第一道闸门应当在这里就明确地拦下来。
+    """
+    with pytest.raises(ValidationError):
+        ChangelogPatch.model_validate(make_add_patch(**{field: value}))
+
+
+def test_empty_members_list_is_rejected() -> None:
+    """compress 的权威是成员集：空集合意味着压缩没有任何可回溯来源。"""
+    with pytest.raises(ValidationError):
+        ChangelogPatch.model_validate(
+            {"op": "compress", "id": "f_070", "text": "压缩后的事实", "members": []}
+        )
+
+
+@pytest.mark.parametrize("op", ["adopt", "retire"])
+def test_reconcile_ops_are_readable(op: str) -> None:
+    """SPEC §4 的 adopt / retire 属于契约词汇，读取器今天就得认识。
+
+    与 compress（v0.5 才实现）同理：changelog 是长期格式，"读取器必须
+    认识契约里的每个 op"不该只对 §3 的 op 生效。字段形态是 M3 的设计，
+    因此这里只钉"能读进来"。
+    """
+    patch = ChangelogPatch.model_validate({"op": op})
+    assert patch.op.value == op
+
+
+def test_writer_recipe_emits_contract_keys() -> None:
+    """钉住给 M2 的写盘配方：``mode="json", by_alias=True``。
+
+    漏掉 by_alias 会写出 ``from_fact:``，而契约键是 ``from``（SPEC §3）；
+    ChangelogEntry 的 docstring 因此把这条写成硬性要求。
+    """
+    patch = ChangelogPatch.model_validate({"op": "link", "from": "f_042", "to": "f_017"})
+    dumped = patch.model_dump(mode="json", by_alias=True)
+    assert dumped["from"] == "f_042"
+    assert "from_fact" not in dumped
+    assert dumped["op"] == "link"  # mode="json" 下枚举已降为字符串
+    assert dumped["result"] == "applied"
+
+
 def test_clearance_and_fact_status_vocabulary() -> None:
     """词汇完整性：读者权限与事实状态的取值集合不因 M2 重构而变。"""
     assert {c.value for c in Clearance} == {"normal", "high"}

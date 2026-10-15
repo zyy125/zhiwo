@@ -59,6 +59,12 @@ class Clearance(enum.StrEnum):
 # 避免在 id / target_id / members 上重复写同一个 pattern。
 FactId = Annotated[str, Field(pattern=r"^f_\d{3,}$")]
 
+# "在场即非空"的字符串。用于补丁的 text / evidence / source / target / reason：
+# 这些字段要么缺席（None），要么必须携带真实内容。空串是"看起来填了"的缺席，
+# 而 evidence: "" 永远不可能是逐字引文——把关口留在结构层，好过让它
+# 变成 M4 里一条语焉不详的拒绝记录。
+NonEmptyStr = Annotated[str, Field(min_length=1)]
+
 
 class Section(BaseModel):
     """``profile.yaml`` 中的一个分区声明（SPEC §1 / §5）。
@@ -157,13 +163,23 @@ class Profile(BaseModel):
 
 
 class PatchOp(enum.StrEnum):
-    """补丁操作（SPEC §3）。compress 由 distill 发射，v0.5 才实现——
-    但枚举值现在就有，因为 changelog 是长期格式，读取器必须认识它。"""
+    """changelog 里出现过的全部操作值。
+
+    - SPEC §3 的四种补丁：add / supersede / link / compress。
+      compress 由 distill 发射、v0.5 才实现，但枚举值现在就有——
+      changelog 是长期格式，读取器必须认识它。
+    - SPEC §4 的两种 reconcile 事件：adopt（收编手写行）/ retire（事实
+      被手删）。它们由 M3 写入，这里同样先放进词汇表：理由与 compress
+      一致——既然"读取器必须认识契约里的每个 op"，就没有理由只对
+      §3 的 op 生效。M3 落地 reconcile 时补上 _REQUIRED_BY_OP 的表行。
+    """
 
     ADD = "add"
     SUPERSEDE = "supersede"
     LINK = "link"
     COMPRESS = "compress"
+    ADOPT = "adopt"  # SPEC §4：手写事实被收编，行本身即 evidence
+    RETIRE = "retire"  # SPEC §4：事实被手删，状态转 archived
 
 
 class FactKind(enum.StrEnum):
@@ -215,6 +231,10 @@ _REQUIRED_BY_OP: dict[PatchOp, tuple[str, ...]] = {
     # compress 的权威是成员集而非 evidence：压缩文本是重写，
     # 可回溯性由成员集合保证（SPEC §3）。
     PatchOp.COMPRESS: ("id", "members", "text"),
+    # 刻意没有 adopt / retire：SPEC §4 规定了这两个 op 的存在与语义，
+    # 但没有规定它们的字段形态，那是 M3 的设计。表里缺行时按"无必填字段"
+    # 处理（见 _check_required_for_op 的 .get），使 M3 写出的条目今天就能
+    # 被读取器接受，而不是等到 M3 把表补齐。
 }
 
 
@@ -235,18 +255,18 @@ class ChangelogPatch(BaseModel):
 
     op: PatchOp
     id: FactId | None = None  # add/supersede 由 merger 分配（SPEC §3）
-    target: str | None = None  # add 的目标文件
+    target: NonEmptyStr | None = None  # add 的目标文件
     target_id: FactId | None = None  # supersede 的目标事实
     kind: FactKind | None = None
-    text: str | None = None
-    evidence: str | None = None  # 逐字原文；永久保存在 changelog（SPEC §3）
-    source: str | None = None  # 形如 journal/2026-10-11.md#L7
-    members: list[FactId] | None = None  # compress：成员集合
+    text: NonEmptyStr | None = None
+    evidence: NonEmptyStr | None = None  # 逐字原文；永久保存在 changelog（SPEC §3）
+    source: NonEmptyStr | None = None  # 形如 journal/2026-10-11.md#L7
+    members: list[FactId] | None = Field(default=None, min_length=1)  # compress：成员集合
     # ``from`` 是 Python 关键字，字段名改用 from_fact，YAML 侧仍是 from。
     from_fact: FactId | None = Field(default=None, alias="from")
     to: FactId | None = None
     result: PatchResult | None = PatchResult.APPLIED
-    reason: str | None = None  # result 为 rejected/skipped 时的人类可读理由
+    reason: NonEmptyStr | None = None  # result 为 rejected/skipped 时的人类可读理由
 
     @model_validator(mode="after")
     def _check_required_for_op(self) -> Self:
@@ -254,8 +274,17 @@ class ChangelogPatch(BaseModel):
 
         缺 ``evidence`` 的 add/supersede 在这里就死掉——硬规则 4
         "没有逐字 evidence 的补丁一律拒绝"的第一道闸门。
+
+        只查"缺席"（None）是不够的：空串同样是缺席的表现，而
+        ``evidence: ""`` 永远不可能是逐字引文，``members: []`` 更是一个
+        没有权威来源的压缩。因此这几个字段的类型都带 ``min_length=1``
+        （见 NonEmptyStr 与 members 的 Field），把关口留在结构层。
+
+        表里没有行的 op（今天的 adopt/retire）按"无必填字段"处理：
+        它们的存在与语义在契约里，字段形态是 M3 的设计。
         """
-        missing = [f for f in _REQUIRED_BY_OP[self.op] if getattr(self, f) is None]
+        required = _REQUIRED_BY_OP.get(self.op, ())
+        missing = [f for f in required if getattr(self, f) is None]
         if missing:
             raise ValueError(f"op {self.op.value!r} requires {', '.join(missing)} (SPEC §3)")
         return self
@@ -267,10 +296,17 @@ class ChangelogEntry(BaseModel):
     changelog 是只追加的审计轨迹：每次 merge 一个文件，永不改写、
     永不删除；``merge`` id 就是文件名的 stem。
 
-    注意给 M2 的提醒：``model_dump()`` 默认产出枚举成员而非字符串，
-    写盘时须用 ``.value`` 或 ``mode="json"``——否则 YAML 里会出现
-    ``!!python/object`` 之类的非契约形态（编码法见 plan §4：UTF-8 +
-    ``allow_unicode``）。
+    **给 M2 写盘方的两条硬性要求**（写错就会产出非契约形态的 YAML）：
+
+    1. ``by_alias=True`` 必须打开。``from_fact`` 这个字段名只是 Python
+       侧的规避（``from`` 是关键字），契约键是 ``from``（SPEC §3）。
+       实测：``model_dump(mode="json")`` 会写出 ``from_fact:``，
+       只有加上 ``by_alias=True`` 才写出 ``from:``。
+    2. ``mode="json"``（或对枚举取 ``.value``）。默认 dump 产出枚举成员，
+       YAML 里会变成 ``!!python/object`` 之类的标签。
+
+    合起来就是写盘形态：``model_dump(mode="json", by_alias=True)``，
+    再用 ``allow_unicode=True`` 交给 PyYAML（编码法，plan §4）。
     """
 
     model_config = ConfigDict(extra="ignore")

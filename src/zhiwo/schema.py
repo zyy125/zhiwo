@@ -38,23 +38,34 @@ class _UniqueKeyLoader(yaml.SafeLoader):
     """
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> Any:
-        # flatten_mapping 处理 YAML 的合并键（<<），与基类行为保持一致，
-        # 否则带 << 的文件会出现"行为不一致但没人知道为什么"。
+        # 本节点自己写出的键值对。flatten_mapping 会把合并键（<<）的条目
+        # **前置**到 node.value，因此自己写出的部分始终是尾部切片。
+        explicit_count = len(node.value)
         self.flatten_mapping(node)
+        explicit_start = len(node.value) - explicit_count
+
         mapping: dict[Any, Any] = {}
-        for key_node, value_node in node.value:
+        seen_explicit: set[Any] = set()
+        for index, (key_node, value_node) in enumerate(node.value):
             key = self.construct_object(key_node, deep=deep)
             try:
-                already_present = key in mapping
+                hash(key)
             except TypeError:  # 列表等不可哈希的键
                 raise SchemaError(
                     f"unhashable mapping key at line {key_node.start_mark.line + 1}"
                 ) from None
-            if already_present:
-                raise SchemaError(
-                    f"duplicate mapping key {key!r} at line {key_node.start_mark.line + 1}"
-                    " — refusing to silently drop an earlier block"
-                )
+            # 只有"本节点自己写出"的键才判重。合并进来的键被显式键覆盖
+            # （``<<: *base`` 之后再写 ``title: ...``）是 YAML 合法且约定的
+            # 行为——后写者胜；把它当重复键会误报，且报错文本（"拒绝静默
+            # 丢弃前一段"）与事实相反：这里并没有任何东西被丢弃。
+            if index >= explicit_start:
+                if key in seen_explicit:
+                    raise SchemaError(
+                        f"duplicate mapping key {key!r} at line "
+                        f"{key_node.start_mark.line + 1}"
+                        " — refusing to silently drop an earlier block"
+                    )
+                seen_explicit.add(key)
             mapping[key] = self.construct_object(value_node, deep=deep)
         return mapping
 
@@ -180,11 +191,17 @@ def can_read(clearance: Clearance, section: Section) -> bool:
     **"journal 在任何 clearance 下都不进 reader view"**（plan §6）是
     recall 层的视图规则，不是本函数的规则——``can_read(HIGH, journal)``
     为 True，因为 journal 回想本来就是一项独立的、需要高权限的能力。
+
+    比较一律用 ``==`` 而非 ``is``：``Clearance`` 是 StrEnum，值相等的
+    字符串与枚举成员 ``==`` 成立。CLI（click 的 Choice 参数）、MCP 参数、
+    配置文件都可能把 ``"high"`` 作为**裸字符串**递进来——用 ``is`` 比较时
+    它会静默落到 normal 分支，等于把高权限请求降级成"看不到高敏感分区"
+    而没有任何报错。这类失败必须不可能发生，而不是靠每个调用方记得转换。
     """
-    if clearance is Clearance.HIGH:
+    if clearance == Clearance.HIGH:
         return True
     # 默认拒绝：normal 读者只拿得到**显式标注为 normal** 的分区。
     # 写成"非 normal 即需高权限"而不是"是 high 才需高权限"，是为了让
     # 判定偏向失败安全：万一有构造路径绕过了模型校验（sensitivity 为
     # None），结果落在"读不到"一侧，而不是落在泄漏一侧。
-    return section.sensitivity is Sensitivity.NORMAL
+    return section.sensitivity == Sensitivity.NORMAL
