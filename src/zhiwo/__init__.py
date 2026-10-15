@@ -8,6 +8,8 @@ M1 阶段只落地 L1（schema）：profile 的加载与校验。
 ``zhiwo.schema`` 的内部划分。
 """
 
+import importlib.metadata
+
 from zhiwo.errors import (
     LockHeld,
     MergeRefused,
@@ -37,7 +39,14 @@ from zhiwo.schema import (
     template_text,
 )
 
-__version__ = "0.2.0.dev0"
+# 版本号只有一个来源：pyproject.toml（经安装元数据读出）。
+# 刻意不在这里再写一个字面量——两处版本迟早会漂移，而 MCP/CLI 会把它
+# 当成对外报告的版本，报错了没人会发现。未安装（直接跑源码树）时给出
+# 一个明显非发布版的占位值，而不是假装知道版本。
+try:
+    __version__ = importlib.metadata.version("zhiwo")
+except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "Axis",

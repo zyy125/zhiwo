@@ -7,13 +7,18 @@ M1 的第一条提交只有脚手架，这条测试让 CI 从第一天起就真�
 把它写死只会制造一条"改版本就红"的假警报。
 """
 
-import re
+import importlib.metadata
 
 import zhiwo
 
 
-def test_version_is_exposed() -> None:
-    assert re.fullmatch(r"\d+\.\d+\.\d+.*", zhiwo.__version__), zhiwo.__version__
+def test_version_has_a_single_source_of_truth() -> None:
+    """``__version__`` 必须就是安装元数据里的版本。
+
+    版本只在 pyproject.toml 里写一次；再在代码里抄一份，两处迟早漂移，
+    而 MCP/CLI 会把它当对外报告的版本号——报错了没人会发现。
+    """
+    assert zhiwo.__version__ == importlib.metadata.version("zhiwo")
 
 
 def test_public_api_is_importable() -> None:
