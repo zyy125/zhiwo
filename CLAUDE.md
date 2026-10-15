@@ -6,7 +6,9 @@ Zhiwo (知我, "knows me"): a local-first personal dossier that any authorized
 AI reads as context. Currently **pre-MVP**: this repo holds the philosophy
 (READMEs) and the data contract (SPEC.md). Code comes after the contract.
 
-**Language conventions:** code, comments, issues, commit messages — English.
+**Language conventions:** code identifiers, issues, commit messages —
+English. Comments — **Chinese, and detailed**: explain intent, cite the
+contract (SPEC §), and cover edge cases; never just restate the code.
 READMEs — bilingual (README.md English, README.zh.md Chinese).
 
 ## Planned architecture (7 layers)
