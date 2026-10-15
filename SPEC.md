@@ -312,6 +312,14 @@ queue applied after distill. Confirming a pending fact that would exceed
 the budget likewise triggers distill first. Zero-friction capture (iron
 rule #2) survives budget enforcement.
 
+> **MVP carve-out (v0.2 implementation).** Until distill exists, over-budget
+> neither defers nor blocks: patches apply, the merge prints a loud warning,
+> and the event is recorded. A defer queue with no drain would strand facts
+> indefinitely, and this SPEC does not define where the queue durably lives.
+> The queue is redesigned together with its drain (distill); this note lapses
+> when the mechanism above ships. Record: `docs/decisions.md` D-002
+> (rule-7 approval 2026-10-14).
+
 The failure mode this prevents: the dossier quietly becomes another pile of
 text that no AI can actually finish reading — at which point the product is
 indistinguishable from a notes folder.
