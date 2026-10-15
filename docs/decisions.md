@@ -41,3 +41,27 @@ anyway.
 wanted badly enough to pay (1)–(4). Nothing in Zhiwo's correctness depends on
 it: the plain-files guarantee is about *you* being able to read and edit the
 dossier, not about any particular editor's link graph.
+
+## D-002 — Over-budget is warn-only until distill exists
+
+**Date:** 2026-10-14 · **Status:** accepted
+
+**Context.** SPEC §6 defers `add`/`supersede` patches into a queue when the
+core budget is exceeded; the queue is drained by distill. Distill is v0.5 —
+the v0.2 MVP ships without it. A queue with no drain strands facts
+indefinitely, and the SPEC does not define where the queue durably lives:
+`.index/` is disposable, so putting it there would violate "nothing is ever
+lost".
+
+**Decision.** In the v0.2 MVP, an over-budget state never blocks and never
+defers: patches apply, the merge prints a loud warning naming v0.5 distill,
+and the event surfaces in the merge summary. SPEC §6 carries a
+version-scoped carve-out note that lapses when the §6 mechanism ships. The
+defer queue will be redesigned together with its drain.
+
+**Why.** Of the guarantees in play, capture-never-blocks (iron rule #2) and
+"nothing is ever lost" must survive the MVP; "budget is enforced by
+deferral" cannot survive without distill in any case. Warn-only degrades the
+budget from a hard gate to a visible signal — the honest MVP posture, and a
+reversible one. Contract-facing carve-out approved by the owner 2026-10-14
+(hard rule 7).
