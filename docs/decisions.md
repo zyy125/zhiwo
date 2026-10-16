@@ -132,3 +132,73 @@ footing as `sensitivity`, `op`, and `kind`.
 sensitivity must make that explicit (a named level, not an omission). If a
 fourth axis is ever wanted, it is a contract change (rule 7): the enum
 member and the SPEC edit land together.
+
+## D-005 — L0 store: durable-write recipe, byte-pinning scope, and bootstrap posture
+
+**Date:** 2026-10-16 · **Status:** accepted
+
+**Context.** M2 implemented L0 (`store.py`, `factfile.py`) and left several
+implementation-level choices that the plan doc explicitly delegates to the
+implementation PRs ("model fields, function signatures live in the
+implementation PRs, not here"). They are recorded together because they share
+one theme: *which artefact is authoritative for what*.
+
+**Decision.**
+
+1. **Atomic writes.** `atomic_write` = `mkstemp` in the target directory →
+   write UTF-8 with `newline=""` → `flush` + `os.fsync(file)` → `os.replace`
+   → best-effort `fsync(dir)`. The journal is the deliberate exception: it is
+   opened `O_APPEND`, written, and fsynced in place, never rewritten. Its
+   append is the durability anchor of plan §5 step 2 — from that moment a
+   capture is safe, and nothing later may roll it back (iron rule #2).
+2. **Byte-pinning scope.** Fact files (`.md` under `about/` and `goals/`) are
+   byte-pinned: `parse → render` must be byte-identical, and a merge rewrites
+   only lines it has a decision for (plan §4's round-trip law). Changelog
+   entries are **not** byte-pinned — only parse-compatible. They are
+   machine-written once and append-only, and the golden example carries
+   hand-written YAML comments, so re-dumping it could never be byte-identical;
+   pinning it would have been an assertion about PyYAML's formatting rather
+   than about the contract.
+3. **Merge id vs filename stem.** SPEC §1 requires them to be equal. The
+   writer enforces it (`model_copy(update={"merge": stem})`), so no caller can
+   get it wrong. The golden example predates this and carries an `m_` prefix
+   (`merge: m_2026-10-11T2130` for `2026-10-11T2130.yaml`); per R5's posture
+   the example stays untouched, and the reader accepts it, because the reader
+   reads content, not naming conventions.
+4. **Marker parsing never raises; writing always may.** A damaged marker is
+   *expected input* (SPEC §4): parsing classifies it as `LineKind.DAMAGED`
+   with a reason and leaves the raw line untouched, for reconcile to
+   quarantine. The write side (`render_fact_line`) is a hard gate and rejects
+   text that would break the line grammar (plan §8 R15) — newline, `<!--`,
+   `-->`, leading/trailing whitespace, empty, and `~~` (which would collide
+   with the strikethrough rendering). Consequence: the parser can never lose
+   a fact to a hand-edit, and the writer can never produce one a hand-edit
+   would have to repair.
+5. **Bootstrap posture.** `profile.yaml` is copied verbatim from the package
+   template (never re-serialized — D-003's consequence: comments and
+   formatting belong to the human). Section files are created **empty**: the
+   content is the human's, and pre-filling headings would be pretending to
+   know what goes there. `git init` runs, but there is **no initial commit** —
+   the first commit is the first merge's, so "every merge is one commit"
+   (SPEC §7) holds from the very first one. A new daily journal file gets only
+   a `# <date>` heading; the golden example's explanatory HTML comments are
+   documentation for a reader of the example, not part of the format.
+6. **Error vocabulary grows by three.** `plan §4` named five exception
+   classes; L0 has three more failure modes with no home — `MarkerError`,
+   `DossierNotFound`, `GitError`. Following M1's posture (the vocabulary is
+   the cross-layer API, so names are pinned before they are raised), they are
+   added to `errors.py` rather than left as bare `ZhiwoError` or
+   `OSError`/`CalledProcessError` leakage.
+
+**Why.** Each choice picks the artefact that can be the authority on a
+question: the journal on durability, the fact file on text, the changelog on
+provenance, the human on anything hand-edited. Where two artefacts could
+claim authority (a re-dumped changelog, a merge id vs its filename, a
+hand-written marker vs a parseable one), the decision names the winner
+explicitly instead of letting whichever code path runs first decide.
+
+**Consequences.** An index-backed `known_fact_ids` can replace the scan
+without touching callers (plan §3 decision 1). A Windows port must replace
+`fcntl` (POSIX-only, accepted post-MVP). If a changelog format v2 ever needs
+byte-pinning or a migration, that is a new decision, not an amendment to this
+one.
