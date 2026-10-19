@@ -1,14 +1,16 @@
 """Zhiwo (知我) — 本地优先的个人档案，供被授权的 AI 作为上下文阅读。
 
 本包的磁盘契约见仓库根目录 ``SPEC.md``；实现分层见 ``CLAUDE.md``。
-已落地：L1（schema，M1）与 L0（store + factfile，M2）。
+已落地：L1（schema，M1）、L0（store + factfile，M2）与 reconcile
+（SPEC §4 的五种观察 + id 空间，M3）。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
 ``zhiwo.schema`` / ``zhiwo.store`` / ``zhiwo.factfile`` 的内部划分。
 
 分层纪律：``factfile`` 只认字符串，``store`` 是唯一碰磁盘的模块，
-``models`` 零 I/O——换存储后端只需动 ``store.py``。
+``models`` 零 I/O——换存储后端只需动 ``store.py``；``reconcile``
+是纯扫描（D-006），读档案走 ``store``、改文档走内存、落盘归调用方。
 """
 
 import importlib.metadata
@@ -28,6 +30,7 @@ from zhiwo.factfile import (
     FactLine,
     LineKind,
     Marker,
+    mentioned_fact_ids,
     mentions_fact_id,
     parse_marker,
     render_fact_line,
@@ -45,6 +48,19 @@ from zhiwo.models import (
     Profile,
     Section,
     Sensitivity,
+)
+from zhiwo.reconcile import (
+    Adoption,
+    Conflict,
+    Location,
+    MarkerWarning,
+    QuarantineItem,
+    ReconcileReport,
+    ReconcileScan,
+    Retirement,
+    next_fact_id,
+    reconcile_documents,
+    reconcile_dossier,
 )
 from zhiwo.schema import (
     can_read,
@@ -72,10 +88,12 @@ except importlib.metadata.PackageNotFoundError:  # pragma: no cover
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "Adoption",
     "Axis",
     "ChangelogEntry",
     "ChangelogPatch",
     "Clearance",
+    "Conflict",
     "Dossier",
     "DossierNotFound",
     "FactDocument",
@@ -85,14 +103,20 @@ __all__ = [
     "GitError",
     "JournalAppend",
     "LineKind",
+    "Location",
     "LockHeld",
     "Marker",
     "MarkerError",
+    "MarkerWarning",
     "MergeRefused",
     "PatchOp",
     "PatchResult",
     "Profile",
     "ProviderError",
+    "QuarantineItem",
+    "ReconcileReport",
+    "ReconcileScan",
+    "Retirement",
     "SchemaError",
     "Section",
     "Sensitivity",
@@ -103,11 +127,15 @@ __all__ = [
     "can_read",
     "git_init",
     "load_profile",
+    "mentioned_fact_ids",
     "mentions_fact_id",
+    "next_fact_id",
     "parse_changelog_entry",
     "parse_marker",
     "parse_profile",
     "parse_yaml",
+    "reconcile_documents",
+    "reconcile_dossier",
     "render_fact_line",
     "render_marker",
     "template_text",

@@ -171,7 +171,7 @@ class PatchOp(enum.StrEnum):
     - SPEC §4 的两种 reconcile 事件：adopt（收编手写行）/ retire（事实
       被手删）。它们由 M3 写入，这里同样先放进词汇表：理由与 compress
       一致——既然"读取器必须认识契约里的每个 op"，就没有理由只对
-      §3 的 op 生效。M3 落地 reconcile 时补上 _REQUIRED_BY_OP 的表行。
+      §3 的 op 生效。必填字段见 _REQUIRED_BY_OP（M3，形态记在 D-006）。
     """
 
     ADD = "add"
@@ -231,10 +231,19 @@ _REQUIRED_BY_OP: dict[PatchOp, tuple[str, ...]] = {
     # compress 的权威是成员集而非 evidence：压缩文本是重写，
     # 可回溯性由成员集合保证（SPEC §3）。
     PatchOp.COMPRESS: ("id", "members", "text"),
-    # 刻意没有 adopt / retire：SPEC §4 规定了这两个 op 的存在与语义，
-    # 但没有规定它们的字段形态，那是 M3 的设计。表里缺行时按"无必填字段"
-    # 处理（见 _check_required_for_op 的 .get），使 M3 写出的条目今天就能
-    # 被读取器接受，而不是等到 M3 把表补齐。
+    # SPEC §4 的两种 reconcile 事件（M3，字段形态记在 D-006）：
+    #
+    # adopt 的 evidence 是**行本身**（去掉行终止符）——人写下的就是原话，
+    # kind 恒为 statement（SPEC §2.3：原话支撑，非推断）；target 与 add
+    # 同义（分区声明路径）；source 指向收编发生的那一行（``path#L<n>``，
+    # 与 add 的 journal 指针同一坐标系）。
+    PatchOp.ADOPT: ("id", "target", "kind", "text", "evidence", "source"),
+    # retire 记录的是对人类动作的**观察**：事实已经不在盘上，没有可以
+    # 逐字引用的 evidence——可引用的是"为什么判它被手删"，即 reason。
+    # result 走默认的 applied：归档（状态转 archived）在记录写入时
+    # 已经生效，事实本来就不在文件里（SPEC §2.1：archived 只存在于
+    # changelog，文件里没有它的写法——retire 补丁本身就是墓碑）。
+    PatchOp.RETIRE: ("id", "reason"),
 }
 
 
@@ -246,9 +255,11 @@ class ChangelogPatch(BaseModel):
     （身份在 merger 分配后才存在），所以这个模型描述的是 changelog 侧。
 
     ``extra="ignore"``（与 Profile 的 forbid 相反）是有意的：SPEC 前言说
-    数据要比实现活得久，changelog 尤其如此。未来版本给条目加字段
-    （例如 M3 的 reconcile 事件）不应让旧读取器崩掉；"缺 schema_version
-    视为 1"（plan §3 决策 6）已经是同一姿态。
+    数据要比实现活得久，changelog 尤其如此。未来版本给条目加字段不应
+    让旧读取器崩掉；"缺 schema_version 视为 1"（plan §3 决策 6）已经是
+    同一姿态。M3 落地后契约里的 op 已全部有 _REQUIRED_BY_OP 表行
+    （含 §4 的 adopt/retire，D-006），但本模型对新 op 依旧宽容——
+    "读取器必须认识每个 op"约束的是**写出侧**，不是读取侧。
     """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -280,8 +291,9 @@ class ChangelogPatch(BaseModel):
         没有权威来源的压缩。因此这几个字段的类型都带 ``min_length=1``
         （见 NonEmptyStr 与 members 的 Field），把关口留在结构层。
 
-        表里没有行的 op（今天的 adopt/retire）按"无必填字段"处理：
-        它们的存在与语义在契约里，字段形态是 M3 的设计。
+        缺行兜底按"无必填字段"处理（``.get``）：契约里的 op 今天已全部
+        有表行（含 §4 的 adopt/retire），但 v2 若新增 op，旧代码遇到新
+        op 时应该继续可读——写侧闸门在新代码里，不在读取器里。
         """
         required = _REQUIRED_BY_OP.get(self.op, ())
         missing = [f for f in required if getattr(self, f) is None]

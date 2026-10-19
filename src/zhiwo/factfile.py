@@ -360,17 +360,40 @@ def mentions_fact_id(text: str, fact_id: str) -> bool:
     "这条事实被手删了"的判定必须只在**确实不存在**时成立——误判会
     把一条还活着的事实退役掉，而退役是"never resurrected"（SPEC §4）。
 
-    因此这是**存在性检测，不是解析**，两条设计由此而来：
+    语义与边界规则同 :func:`mentioned_fact_ids`（单 id 版就是集合版的
+    成员测试）——两套实现迟早漂移，这里只留一套。
+    """
+    return fact_id in mentioned_fact_ids(text)
 
-    - 只扫 ``<!-- … -->`` 之间的内容。``[[f_051]]`` 这样的 wikilink 出现在
-      span 之外，永不被当作"这条事实还在"（SPEC §2.4：链接是引用，不是副本；
-      否则删掉一条事实却留着指向它的链接，就永远退不掉它了）。
+
+def mentioned_fact_ids(text: str) -> frozenset[str]:
+    """整份文件文本里出现过的**全部**事实 id（R8 存在性检查的集合版）。
+
+    M3 的 reconcile 对每个事实文件各调一次，产出同时服务两个问题：
+
+    - **retire 的存在性**（SPEC §4 第 2 案）：changelog 已知的 id 不在
+      任何文件的集合里 → 被手删；
+    - **id 天花板**（plan §3 决策 4）：分配新 id 时的 max 取自文件侧
+      集合 ∪ changelog 侧集合——宁可跳号，绝不复用。
+
+    因此这是**存在性检测，不是解析**，三条规则由此而来：
+
+    - 只扫 ``<!-- … -->`` 之间的内容。``[[f_051]]`` 这样的 wikilink 先被
+      剥掉（SPEC §2.4：链接是引用，不是副本；否则删掉一条事实却留着
+      指向它的链接，就永远退不掉它了）。
     - 未闭合的 ``<!--`` 延伸到文件末尾，照样算一个 span：marker 被手改坏
       （``<!-- f_051`` 少了 ``-->``）时，这一条**仍然是存在的**——检测
-      绝不因为"解析不了"而谎报缺席。
+      绝不因为"解析不了"而谎报缺席。散文注释里提到的 id 同样算在场
+      （检测存在，不猜语义——它可能就是一条损坏的事实行）。
+    - 词边界匹配（前后不是 ``[0-9A-Za-z_]``）：``f_0512`` 不算 ``f_051``
+      的在场，也不会把 ``xf_051`` 当成 ``f_051``。
     """
-    pattern = re.compile(rf"(?<![0-9A-Za-z_]){re.escape(fact_id)}(?![0-9A-Za-z_])")
-    return any(pattern.search(_WIKILINK_RE.sub("", span)) for span in _comment_spans(text))
+    ids = {
+        match.group()
+        for span in _comment_spans(text)
+        for match in _MENTIONED_ID_RE.finditer(_WIKILINK_RE.sub("", span))
+    }
+    return frozenset(ids)
 
 
 # 行终止符。用 \Z 而不是 $：$ 还会在"文末换行之前"匹配，那会把
@@ -383,9 +406,14 @@ _LINE_ENDING_RE = re.compile(r"(\r\n|\r|\n)\Z")
 # 是这行确实坏了。
 _TRAILING_MARKER_RE = re.compile(r"<!--\s*(?P<inner>.*?)\s*-->\s*\Z")
 
-# wikilink（SPEC §2.4 的 [[f_042]]）。在 mentions_fact_id 里被剥掉：
+# wikilink（SPEC §2.4 的 [[f_042]]）。在 mentioned_fact_ids 里被剥掉：
 # 链接是引用，不能当作"这条事实还在文件里"的证据。
 _WIKILINK_RE = re.compile(r"\[\[[^\]]*\]\]")
+
+# mentioned_fact_ids 的收集正则：与 per-id 检查同一边界语义（前后不是
+# 字母数字下划线），只是不锚定具体 id——一次扫描收集全部。
+# ``f_\d{3,}`` 贪婪匹配整段数字，因此 "f_0512" 产出 f_0512 而不是 f_051。
+_MENTIONED_ID_RE = re.compile(r"(?<![0-9A-Za-z_])f_\d{3,}(?![0-9A-Za-z_])")
 
 # 列表项前缀。**要求行首无缩进**：缩进的 ``  - xxx`` 归为散文。
 # 取舍写在 _classify 的 docstring 里。
