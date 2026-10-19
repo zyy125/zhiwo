@@ -556,9 +556,7 @@ def test_mentioned_ids_collects_every_id_in_comment_spans() -> None:
         "- 另一条 <!-- f_003 superseded-by:f_017 -->\n"
         "- 最后一条 <!-- f_017 -->\n"
     )
-    assert mentioned_fact_ids(text) == frozenset(
-        {"f_001", "f_002", "f_051", "f_003", "f_017"}
-    )
+    assert mentioned_fact_ids(text) == frozenset({"f_001", "f_002", "f_051", "f_003", "f_017"})
 
 
 def test_mentioned_ids_excludes_wikilinks_and_outside_comments() -> None:
@@ -567,11 +565,7 @@ def test_mentioned_ids_excludes_wikilinks_and_outside_comments() -> None:
     注释内嵌链接（黄金 values.md 的说明性注释就是这种写法）也要剥——
     链接是引用，不能算"这条事实还在文件里"。
     """
-    text = (
-        "# 标题里写 f_001 不算\n"
-        "- 见 [[f_051]] <!-- f_002 -->\n"
-        "<!-- 用 [[f_051]] 的写法 -->\n"
-    )
+    text = "# 标题里写 f_001 不算\n- 见 [[f_051]] <!-- f_002 -->\n<!-- 用 [[f_051]] 的写法 -->\n"
     assert mentioned_fact_ids(text) == frozenset({"f_002"})
 
 
