@@ -1,21 +1,37 @@
 """Zhiwo (知我) — 本地优先的个人档案，供被授权的 AI 作为上下文阅读。
 
 本包的磁盘契约见仓库根目录 ``SPEC.md``；实现分层见 ``CLAUDE.md``。
-M1 阶段只落地 L1（schema）：profile 的加载与校验。
+已落地：L1（schema，M1）与 L0（store + factfile，M2）。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
-``zhiwo.schema`` 的内部划分。
+``zhiwo.schema`` / ``zhiwo.store`` / ``zhiwo.factfile`` 的内部划分。
+
+分层纪律：``factfile`` 只认字符串，``store`` 是唯一碰磁盘的模块，
+``models`` 零 I/O——换存储后端只需动 ``store.py``。
 """
 
 import importlib.metadata
 
 from zhiwo.errors import (
+    DossierNotFound,
+    GitError,
     LockHeld,
+    MarkerError,
     MergeRefused,
     ProviderError,
     SchemaError,
     ZhiwoError,
+)
+from zhiwo.factfile import (
+    FactDocument,
+    FactLine,
+    LineKind,
+    Marker,
+    mentions_fact_id,
+    parse_marker,
+    render_fact_line,
+    render_marker,
 )
 from zhiwo.models import (
     Axis,
@@ -38,6 +54,13 @@ from zhiwo.schema import (
     parse_yaml,
     template_text,
 )
+from zhiwo.store import (
+    Dossier,
+    JournalAppend,
+    atomic_write,
+    bootstrap_dossier,
+    git_init,
+)
 
 # 版本号只有一个来源：pyproject.toml（经安装元数据读出）。
 # 刻意不在这里再写一个字面量——两处版本迟早会漂移，而 MCP/CLI 会把它
@@ -53,9 +76,18 @@ __all__ = [
     "ChangelogEntry",
     "ChangelogPatch",
     "Clearance",
+    "Dossier",
+    "DossierNotFound",
+    "FactDocument",
     "FactKind",
+    "FactLine",
     "FactStatus",
+    "GitError",
+    "JournalAppend",
+    "LineKind",
     "LockHeld",
+    "Marker",
+    "MarkerError",
     "MergeRefused",
     "PatchOp",
     "PatchResult",
@@ -66,10 +98,17 @@ __all__ = [
     "Sensitivity",
     "ZhiwoError",
     "__version__",
+    "atomic_write",
+    "bootstrap_dossier",
     "can_read",
+    "git_init",
     "load_profile",
+    "mentions_fact_id",
     "parse_changelog_entry",
+    "parse_marker",
     "parse_profile",
     "parse_yaml",
+    "render_fact_line",
+    "render_marker",
     "template_text",
 ]
