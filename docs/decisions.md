@@ -202,3 +202,91 @@ without touching callers (plan §3 decision 1). A Windows port must replace
 `fcntl` (POSIX-only, accepted post-MVP). If a changelog format v2 ever needs
 byte-pinning or a migration, that is a new decision, not an amendment to this
 one.
+
+## D-006 — M3 reconcile: scan-not-write, the adopt/retire patch shapes, and the case-5 boundary
+
+**Date:** 2026-10-19 · **Status:** accepted
+
+**Context.** M3 implemented `reconcile.py` (SPEC §4's five observations +
+the id space, plan §5 step 4). SPEC defines the *semantics* of adopt/retire
+but not their field shapes, and leaves open how reconcile relates to the
+pipeline's write steps. These positions were taken during implementation and
+user review.
+
+**Decision.**
+
+1. **Reconcile is a scan, not a writer.** The pure core
+   (`reconcile_documents`) mutates in-memory `FactDocument`s via
+   `FactLine.rewrite` only and returns ready-made `ChangelogPatch`es; every
+   disk write — adopted files, created section files, changelog, git commit
+   — belongs to M4's pipeline steps 8/9/11. This keeps an adoption, its
+   changelog entry, and its commit atomic under plan §5's crash semantics
+   (`git checkout -- about/ goals/` discards a half merge; an un-adopted
+   hand-written line stays adoptable next merge). The round-trip law makes
+   "M4 writes every document back" free.
+2. **Adopt patch shape.** `id / target / kind / text / evidence / source`:
+   evidence is **the line itself** (sans terminator, bullet included — the
+   human's own words are the verbatim quote), kind is always `statement`,
+   `target` is the section's declared path (same semantics as add), `source`
+   is `path#L<n>` in the same coordinate system as add's journal pointer.
+   `result` stays at the `applied` default. A hand-written line whose
+   adoption would break the write-side grammar (R15, e.g. text containing
+   `~~`) is quarantined, never guessed into a file — "never guess" extends
+   to "never write a line that cannot be written legally", and the failed
+   attempt consumes no id.
+3. **Retire patch shape.** `id / reason`, `result` at the `applied` default
+   (archival takes effect when the observation is recorded). No evidence:
+   the fact is already gone from disk, so the recordable thing is *why* the
+   id was judged hand-deleted. **No tombstone anywhere** — the changelog
+   entry is the tombstone (SPEC §2.1: archived never appears in a file);
+   `retired_ids` (ids that already have a retire event) prevents repeat
+   records on every subsequent merge.
+4. **Two id sets, two questions.** The *ceiling* (never reuse) is every id
+   anywhere: parsed markers ∪ all comment-span tokens (damaged markers and
+   prose-comment mentions included — skipping a number is free, reuse is
+   not) ∪ every changelog id including rejected ones (the
+   `known_fact_ids` semantics). *Retire candidates* additionally require an
+   **applied creation event** (op add/supersede/adopt, `result: applied`):
+   a rejected patch's id never existed on disk and must never look
+   hand-deleted. Assignment is `max + 1`, zero-padded to 3, no gap filling
+   (plan §3 decision 4).
+5. **Retire is conservative in both directions.** Presence is
+   `mentioned_fact_ids` over comment spans with `[[…]]` wikilinks stripped
+   (R8): a damaged marker still counts as present (unterminated `<!--`
+   extends to EOF), and a **prose-comment mention counts too** — the golden
+   `career.md` header mentioning `me why f_051` blocks f_051's retire.
+   Chosen deliberately: a false retire is a one-way door
+   ("never resurrected"), while a missed retire is re-judged next merge.
+   Journal is excluded from the scan entirely (a journal mention is not a
+   fact living in a file). Whole-file deletion and emptied files (R12) fall
+   out as per-id retires with a per-id report; file-only ids (never in the
+   changelog) are not retired — plan §5's literal "changelog-known" rule.
+6. **Case 5 is the structural slice only.** M3 flags one contradiction
+   signal visible without semantics: an adopted locked fact whose text
+   *exactly* duplicates an active fact's text (no normalization —
+   plain-file transparency). Nothing is superseded in either direction.
+   Semantic contradiction is extract's judgment (SPEC §3) and lands with
+   M4/M5's locked-fact protection.
+7. **MergeRefused is raised by the scan, before any mutation.** Duplicate
+   ids abort the whole merge naming every `path:L<n>` location; documents
+   stay byte-identical (a refused merge leaves no trace). Quarantine
+   findings from the same run are lost until the duplicate is fixed —
+   acceptable: the user must edit files either way, and the next run
+   re-reports. Quarantine, conflicts, and R9 struck-mismatch warnings are
+   report data and never block; rendering them is the CLI's job (M7).
+
+**Why.** The recurring theme is *who owns a moment of change*: reconcile
+owns the judgment, M4 owns the write, the human owns anything their hand
+touched. Every refusal to act (no tombstone, no auto-supersede, no
+gap-filling, quarantine instead of repair) protects the same property —
+the plain files and the changelog remain a complete, unambiguous account
+of what happened and who decided it.
+
+**Consequences.** M4 calls `reconcile_dossier` inside the writer lock,
+writes back every returned document plus the created stubs, and appends
+`report.patches` to its changelog entry (plan §5 step 9's "reconcile
+events"). If review-reject archival (plan §5 step 8, "archived via
+changelog") defines a new op rather than reusing `retire`, the
+`retired_ids` derivation in the shell must learn it — flagged for M4.
+`MergeRefused`'s docstring stays accurate: duplicates remain its only
+source.
