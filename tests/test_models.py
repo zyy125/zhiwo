@@ -333,16 +333,58 @@ def test_empty_members_list_is_rejected() -> None:
         )
 
 
-@pytest.mark.parametrize("op", ["adopt", "retire"])
-def test_reconcile_ops_are_readable(op: str) -> None:
+@pytest.mark.parametrize(
+    ("op", "payload"),
+    [
+        (
+            "adopt",
+            {
+                "id": "f_052",
+                "target": "about/career.md",
+                "kind": "statement",
+                "text": "手写的一条事实",
+                "evidence": "- 手写的一条事实",
+                "source": "about/career.md#L4",
+            },
+        ),
+        ("retire", {"id": "f_051", "reason": "fact line missing from every fact file"}),
+    ],
+)
+def test_reconcile_ops_are_readable(op: str, payload: dict[str, object]) -> None:
     """SPEC §4 的 adopt / retire 属于契约词汇，读取器今天就得认识。
 
     与 compress（v0.5 才实现）同理：changelog 是长期格式，"读取器必须
-    认识契约里的每个 op"不该只对 §3 的 op 生效。字段形态是 M3 的设计，
-    因此这里只钉"能读进来"。
+    认识契约里的每个 op"不该只对 §3 的 op 生效。M3 起这两个 op 也有
+    必填字段（D-006）：adopt 形态见本参数化，retire 只需 id + reason。
     """
-    patch = ChangelogPatch.model_validate({"op": op})
+    patch = ChangelogPatch.model_validate({"op": op, **payload})
     assert patch.op.value == op
+    assert patch.result is PatchResult.APPLIED  # 归档/收编在记录时已生效
+
+
+def test_adopt_patch_without_evidence_is_rejected() -> None:
+    """硬规则 4 不因"这是人写的行"而豁免：adopt 的 evidence 就是行本身。"""
+    with pytest.raises(ValidationError, match="evidence"):
+        ChangelogPatch.model_validate(
+            {
+                "op": "adopt",
+                "id": "f_052",
+                "target": "about/career.md",
+                "kind": "statement",
+                "text": "手写的一条事实",
+                "source": "about/career.md#L4",
+            }
+        )
+
+
+def test_retire_patch_requires_reason() -> None:
+    """retire 没有 evidence 可引用（事实已不在盘上），可引用的是 reason。
+
+    一个既无 evidence 又无 reason 的 retire 记录什么也没说——`me why`
+    的整条链路会在这里断掉。
+    """
+    with pytest.raises(ValidationError, match="reason"):
+        ChangelogPatch.model_validate({"op": "retire", "id": "f_051"})
 
 
 def test_writer_recipe_emits_contract_keys() -> None:
