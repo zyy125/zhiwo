@@ -16,6 +16,7 @@ from zhiwo.factfile import (
     FactLine,
     LineKind,
     Marker,
+    mentioned_fact_ids,
     mentions_fact_id,
     parse_marker,
     render_fact_line,
@@ -537,3 +538,72 @@ def test_every_golden_fact_id_is_mentioned(examples_dir: Path) -> None:
     text = (examples_dir / "about/values.md").read_text(encoding="utf-8")
     for fact_id in ("f_001", "f_002", "f_003", "f_009", "f_017"):
         assert mentions_fact_id(text, fact_id)
+
+
+# --- mentioned_fact_ids（集合版：M3 reconcile 的文件侧 id 宇宙）-------------
+
+
+def test_mentioned_ids_collects_every_id_in_comment_spans() -> None:
+    """一次扫描收齐全部：好 marker、坏 marker、散文注释里的提及。
+
+    M3 的 reconcile 对每个文件只调一次本函数，产物同时服务
+    retire 存在性与 id 天花板——少收一个 id 就是误退役或多发一个号。
+    """
+    text = (
+        "<!-- 说明性注释：见 f_001 -->\n"
+        "- 一条事实 <!-- f_002 -->\n"
+        "- 坏 marker <!-- f_051\n"
+        "- 另一条 <!-- f_003 superseded-by:f_017 -->\n"
+        "- 最后一条 <!-- f_017 -->\n"
+    )
+    assert mentioned_fact_ids(text) == frozenset(
+        {"f_001", "f_002", "f_051", "f_003", "f_017"}
+    )
+
+
+def test_mentioned_ids_excludes_wikilinks_and_outside_comments() -> None:
+    """链接（SPEC §2.4）与注释 span 之外的文本不进集合。
+
+    注释内嵌链接（黄金 values.md 的说明性注释就是这种写法）也要剥——
+    链接是引用，不能算"这条事实还在文件里"。
+    """
+    text = (
+        "# 标题里写 f_001 不算\n"
+        "- 见 [[f_051]] <!-- f_002 -->\n"
+        "<!-- 用 [[f_051]] 的写法 -->\n"
+    )
+    assert mentioned_fact_ids(text) == frozenset({"f_002"})
+
+
+def test_mentioned_ids_unterminated_span_reaches_eof() -> None:
+    """未闭合 ``<!--`` 延伸到文末：坏 marker 之后的行也在 span 里。
+
+    这是"损坏 marker 不造成误退役"的实现所在（plan §8 R8）——
+    集合版必须与单 id 版共享该行为，否则两套语义迟早漂移。
+    """
+    text = "- 开头 <!-- f_051\n- 后面这行的 f_052 也在未闭合 span 里\n"
+    assert mentioned_fact_ids(text) == frozenset({"f_051", "f_052"})
+
+
+def test_mentioned_ids_matches_whole_tokens_only() -> None:
+    """``f_0512`` 是它自己的 id，不是 ``f_051`` 的在场，也不会拆出 f_051。"""
+    assert mentioned_fact_ids("- 一条 <!-- f_0510 -->\n") == frozenset({"f_0510"})
+    assert mentioned_fact_ids("- x <!-- xf_051 -->\n") == frozenset()
+
+
+def test_single_id_check_is_membership_in_the_collected_set() -> None:
+    """钉死"单 id 检查 = 集合成员测试"：两者必须是同一实现。
+
+    mentions_fact_id 被现有测试逐条钉住，mentioned_fact_ids 是它的
+    集合化——若有人改了其中一边的边界规则，这条测试会先红。
+    """
+    texts = [
+        "- 一条 <!-- f_051 -->\n",
+        "- 坏 <!-- f_051\n",
+        "- 见 [[f_051]]\n",
+        "- 别的 <!-- f_052 supersedes:f_051 -->\n",
+    ]
+    for text in texts:
+        collected = mentioned_fact_ids(text)
+        for fact_id in ("f_051", "f_052"):
+            assert mentions_fact_id(text, fact_id) == (fact_id in collected)
