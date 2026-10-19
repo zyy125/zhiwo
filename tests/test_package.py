@@ -40,10 +40,34 @@ def test_l0_api_is_re_exported() -> None:
         "atomic_write",
         "bootstrap_dossier",
         "git_init",
+        "mentioned_fact_ids",
         "mentions_fact_id",
         "parse_marker",
         "render_fact_line",
         "render_marker",
+    ):
+        assert name in zhiwo.__all__, name
+        assert getattr(zhiwo, name) is not None, name
+
+
+def test_reconcile_api_is_re_exported() -> None:
+    """M3 的 reconcile 面同样从顶层取用。
+
+    M4 的管线会调 ``reconcile_dossier``、读 ``ReconcileScan`` 的报告
+    类型——它们是管线与扫描之间的 API，不是 reconcile 模块的内部。
+    """
+    for name in (
+        "Adoption",
+        "Conflict",
+        "Location",
+        "MarkerWarning",
+        "QuarantineItem",
+        "ReconcileReport",
+        "ReconcileScan",
+        "Retirement",
+        "next_fact_id",
+        "reconcile_documents",
+        "reconcile_dossier",
     ):
         assert name in zhiwo.__all__, name
         assert getattr(zhiwo, name) is not None, name
