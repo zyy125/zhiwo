@@ -361,3 +361,26 @@ def test_commit_failure_leaves_the_merge_on_disk(dossier: Dossier, git_identity:
         encoding="utf-8"
     )
     assert len(list(dossier.changelog_dir.glob("*.yaml"))) == 2  # 黄金条目 + 新条目
+
+
+def test_golden_dossier_merges_and_commits(git_dossier: Dossier) -> None:
+    """黄金档案 + 真 git 仓库的端到端：既有 f_051、缺失分区、收编后新 id。"""
+    with git_dossier.writer_lock():
+        append = git_dossier.append_journal([DEFAULT_CAPTURE], now=FIXED)
+        scan = reconcile_dossier(git_dossier)
+        capture = Capture.from_journal_append(git_dossier, append)
+        result = merge_dossier(
+            git_dossier,
+            scan=scan,
+            drafts=[add_draft(target="about/career.md")],
+            capture=capture,
+            extractor="mock-v0",
+            now=FIXED,
+        )
+
+    assert result.applied[0].id == "f_052"  # 黄金档案的天花板是 f_051
+    career = (git_dossier.root / "about" / "career.md").read_text(encoding="utf-8")
+    assert "- 厌恶风险 <!-- f_052 -->\n" in career
+    assert commit_count(git_dossier) == 1
+    assert _git(git_dossier.root, "status", "--porcelain") == ""
+    assert len(list(git_dossier.changelog_dir.glob("*.yaml"))) == 2
