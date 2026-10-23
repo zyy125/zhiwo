@@ -11,6 +11,25 @@ English. Comments — **Chinese, and detailed**: explain intent, cite the
 contract (SPEC §), and cover edge cases; never just restate the code.
 READMEs — bilingual (README.md English, README.zh.md Chinese).
 
+## Answer style for code (temporary)
+
+Assume the reader may review outcomes without knowing the implementation. In
+prose about code — summaries, reviews, explanations, PR notes:
+
+- Lead with behavior, effect, and trade-offs. Do not make internal identifiers
+  (function/class/variable names, private helpers, internal module names) the
+  subject of a sentence.
+- When an exact name, path, acronym, or contract term is necessary — to locate
+  a file, quote an error, or name a public command — add a short plain-language
+  gloss immediately after it: what it is, what it does, why it matters.
+  Example: `reconcile_dossier`（合并前扫描档案、收编手写行的函数）.
+- Link a file path by its role when the reader may want to open it; do not make
+  them decode the path.
+- Keep code blocks, diffs, quoted errors, and commit messages exact; this rule
+  is about prose, not artefacts.
+- Gloss once per answer, and do not gloss terms the reader already uses (git,
+  commit, test); over-glossing makes the answer harder to scan.
+
 ## Planned architecture (7 layers)
 
 | Layer | Module | Role | LLM |
