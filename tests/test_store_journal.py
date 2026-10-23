@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from zhiwo.errors import ZhiwoError
+from zhiwo.errors import SchemaError, ZhiwoError
 from zhiwo.store import Dossier, bootstrap_dossier
 
 GOLDEN_DAY = datetime(2026, 10, 11, 22, 30, 0)
@@ -126,3 +126,69 @@ def test_append_works_when_the_journal_directory_is_missing(tmp_path: Path) -> N
     dossier.journal_dir().rmdir()  # 新建的 journal/ 是空的，直接删掉
     append = dossier.append_journal(["目录被删了也要能记"], now=datetime(2026, 10, 12, 9, 0))
     assert append.path.is_file()
+
+
+# --- 读回捕获区间（M4 证据校验的盘上 haystack）----------------------------
+
+
+def test_read_journal_entries_returns_capture_texts(dossier: Dossier) -> None:
+    """读回的是**捕获文本**：项目符号被剥掉，行号与 ``#L<n>`` 同一坐标系。"""
+    assert dossier.read_journal_entries("journal/2026-10-11.md", first_line=7, last_line=7) == (
+        "面试挂了，二面，反馈说项目深度不够。",
+    )
+
+
+def test_read_journal_entries_keeps_cjk_and_order(dossier: Dossier) -> None:
+    """多行区间按文件顺序返回，中文逐字保留（编码法）。"""
+    assert dossier.read_journal_entries("journal/2026-10-11.md", first_line=6, last_line=8) == (
+        "昨晚只睡了六个小时，下午有个面试。",
+        "面试挂了，二面，反馈说项目深度不够。",
+        "和家里通电话，聊到毕业后回不回老家。",
+    )
+
+
+def test_read_journal_entries_leaves_unbulleted_lines_alone(dossier: Dossier) -> None:
+    """手改掉 ``- `` 前缀的行原样返回——证据仍有机会匹配，格式不代修。"""
+    path = dossier.journal_dir() / "2026-10-11.md"
+    path.write_text(path.read_text(encoding="utf-8") + "没有项目符号的一行\n", encoding="utf-8")
+    assert dossier.read_journal_entries("journal/2026-10-11.md", first_line=9, last_line=9) == (
+        "没有项目符号的一行",
+    )
+
+
+@pytest.mark.parametrize(
+    ("first_line", "last_line"),
+    [(0, 1), (7, 6), (99, 99)],
+)
+def test_read_journal_entries_rejects_bad_ranges(
+    dossier: Dossier, first_line: int, last_line: int
+) -> None:
+    """越界/倒置不是"读回空"：证据校验对着空气通过比报错危险得多。"""
+    with pytest.raises(ZhiwoError):
+        dossier.read_journal_entries(
+            "journal/2026-10-11.md", first_line=first_line, last_line=last_line
+        )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "about/career.md",  # 事实文件不是 journal
+        "journal/../about/career.md",  # 目录逃逸
+        "./journal/2026-10-11.md",  # 非规范相对路径
+        "journal\\2026-10-11.md",  # 反斜杠不是 POSIX 分隔符
+        "/etc/passwd",  # 绝对路径
+    ],
+)
+def test_read_journal_entries_rejects_paths_outside_the_journal(
+    dossier: Dossier, relative_path: str
+) -> None:
+    """source 指针只能是 journal 里的行；路径逃逸在 L0 就拦住。"""
+    with pytest.raises(ZhiwoError):
+        dossier.read_journal_entries(relative_path, first_line=1, last_line=1)
+
+
+def test_read_journal_entries_missing_file_is_a_schema_error(dossier: Dossier) -> None:
+    """文件不存在属于"读不出来"，与 L1/L0 的其他读取失败同一姿态。"""
+    with pytest.raises(SchemaError):
+        dossier.read_journal_entries("journal/1999-01-01.md", first_line=1, last_line=1)
