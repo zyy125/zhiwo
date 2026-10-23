@@ -225,6 +225,25 @@ def test_malformed_drafts_surface_but_do_not_block_the_commit(
     assert commit_count(dossier) == 1
 
 
+def test_result_exposes_the_cli_summary_counts(tmp_path: Path, git_identity: None) -> None:
+    """plan §5 步骤 12 的摘要字段都能从结果里直接读，CLI 不必再解析 changelog。"""
+    dossier = bootstrap_dossier(tmp_path / "me")
+    merge_one(dossier, [add_draft(text="第一条", evidence="第一条")], text="第一条")
+    result = merge_one(
+        dossier,
+        [
+            add_draft(text="也许换城市", evidence="也许换城市", kind="inference"),
+            add_draft(text="坏补丁", evidence="不在输入里"),
+        ],
+        text="也许换城市",
+    )
+
+    assert len(result.applied) == 1
+    assert len(result.rejected) == 1
+    assert result.skipped == ()
+    assert result.pending_count == 1
+
+
 def test_cjk_evidence_stays_readable_utf8_on_disk(tmp_path: Path, git_identity: None) -> None:
     dossier = bootstrap_dossier(tmp_path / "me")
     evidence = "面试挂了，二面，反馈说项目深度不够。"
