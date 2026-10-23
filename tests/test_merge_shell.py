@@ -20,7 +20,7 @@ import pytest
 
 from zhiwo.errors import GitError, ZhiwoError
 from zhiwo.factfile import FactDocument
-from zhiwo.merge import BudgetEstimator, Capture, MergeResult, merge_dossier
+from zhiwo.merge import BudgetEstimator, BudgetStatus, Capture, MergeResult, merge_dossier
 from zhiwo.models import PatchOp, PatchResult, Section
 from zhiwo.reconcile import reconcile_dossier
 from zhiwo.store import Dossier, bootstrap_dossier
@@ -156,6 +156,21 @@ def test_untouched_files_stay_byte_identical_and_missing_sections_are_created(
     assert (dossier.root / "about" / "values.md").read_text(encoding="utf-8") == ""
 
 
+def test_add_into_a_declared_but_missing_section_creates_it(
+    tmp_path: Path, git_identity: None
+) -> None:
+    """plan §5 步骤 4：reconcile 建空桩，merge 的 add 落在同一个桩文件上。"""
+    dossier = bootstrap_dossier(tmp_path / "me")
+    (dossier.root / "about" / "values.md").unlink()
+
+    result = merge_one(dossier, [add_draft(target="about/values.md")])
+
+    assert result.applied[0].id == "f_001"
+    assert (dossier.root / "about" / "values.md").read_text(
+        encoding="utf-8"
+    ) == "- 厌恶风险 <!-- f_001 -->\n"
+
+
 def test_reconcile_events_come_before_merge_patches_and_do_not_collide(
     tmp_path: Path, git_identity: None
 ) -> None:
@@ -259,6 +274,12 @@ def test_cjk_evidence_stays_readable_utf8_on_disk(tmp_path: Path, git_identity: 
 
 
 # --- 预算钩子 ---------------------------------------------------------------
+
+
+def test_budget_exactly_at_the_limit_is_not_over() -> None:
+    """SPEC §6 的 "exceeded" 是严格大于；等于预算仍算可用。"""
+    assert BudgetStatus(tokens=4000, limit=4000).over is False
+    assert BudgetStatus(tokens=4001, limit=4000).over is True
 
 
 def test_budget_hook_returns_status_without_blocking(tmp_path: Path, git_identity: None) -> None:
