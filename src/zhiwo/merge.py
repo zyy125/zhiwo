@@ -379,7 +379,7 @@ def _apply_add(
         check_fact_text(text)
     except MarkerError as exc:
         return _rejected_patch(
-            index, PatchOp.ADD, draft, f"text would break the line grammar: {exc}"
+            index, PatchOp.ADD, draft, f"text would break the line grammar: {_clip(str(exc))}"
         )
 
     evidence = _string(draft, "evidence")
@@ -478,7 +478,7 @@ def _apply_supersede(
             index,
             PatchOp.SUPERSEDE,
             draft,
-            f"text would break the line grammar: {exc}",
+            f"text would break the line grammar: {_clip(str(exc))}",
         )
 
     target_text = target.line.text
@@ -493,7 +493,8 @@ def _apply_supersede(
             index,
             PatchOp.SUPERSEDE,
             draft,
-            f"target fact {target_id} cannot be rewritten without breaking the line grammar: {exc}",
+            f"target fact {target_id} cannot be rewritten without breaking the line grammar: "
+            f"{_clip(str(exc))}",
         )
 
     evidence = _string(draft, "evidence")
@@ -523,7 +524,7 @@ def _apply_supersede(
             )
     except MarkerError as exc:  # pragma: no cover - check_fact_text 已挡住
         return _rejected_patch(
-            index, PatchOp.SUPERSEDE, draft, f"cannot render the supersede: {exc}"
+            index, PatchOp.SUPERSEDE, draft, f"cannot render the supersede: {_clip(str(exc))}"
         )
 
     if kind is FactKind.STATEMENT:
@@ -626,7 +627,7 @@ def _apply_link(
             index,
             PatchOp.LINK,
             draft,
-            f"the linked text would break the line grammar: {exc}",
+            f"the linked text would break the line grammar: {_clip(str(exc))}",
         )
     source_fact.line.rewrite(new_text, marker, struck=source_fact.line.struck)
     return ChangelogPatch(op=PatchOp.LINK, from_fact=from_id, to=to_id)
@@ -973,6 +974,11 @@ def _members(value: object) -> list[str] | None:
 
 def _brief(value: object, limit: int = _REASON_VALUE_LIMIT) -> str:
     text = repr(value)
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _clip(text: str, limit: int = _REASON_VALUE_LIMIT) -> str:
+    """截断一段人类可读的错误原文，避免一条坏草稿把 changelog 撑爆。"""
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
