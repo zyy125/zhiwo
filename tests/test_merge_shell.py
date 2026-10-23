@@ -320,6 +320,105 @@ def test_budget_hook_failure_writes_nothing(tmp_path: Path, git_identity: None) 
     assert (dossier.root / "about" / "identity.md").read_text(encoding="utf-8") == ""
 
 
+def test_failed_merge_does_not_poison_the_scan_for_a_drafts_retry(
+    tmp_path: Path, git_identity: None
+) -> None:
+    """失败后复用同一个 scan 重试：补丁与 changelog 都不会丢。
+
+    ``merge_dossier`` 只改 scan 文档的深拷贝。若它直接改 ``scan.documents``，
+    预算钩子失败后 scan 里已经躺着 f_001；再用同一个 scan 重试就会撞 id，
+    或者用 ``drafts=[]`` 把事实写进盘而 changelog 没有任何创建记录。
+    """
+    dossier = bootstrap_dossier(tmp_path / "me")
+
+    def broken(_documents: object) -> int:
+        raise RuntimeError("estimator exploded")
+
+    with dossier.writer_lock():
+        append = dossier.append_journal([DEFAULT_CAPTURE], now=FIXED)
+        scan = reconcile_dossier(dossier)
+        capture = Capture.from_journal_append(dossier, append)
+        identity = next(
+            document for section, document in scan.documents if section.path == "about/identity.md"
+        )
+        assert identity.render() == ""
+
+        with pytest.raises(RuntimeError, match="exploded"):
+            merge_dossier(
+                dossier,
+                scan=scan,
+                drafts=[add_draft()],
+                capture=capture,
+                extractor="mock-v0",
+                now=FIXED,
+                budget=broken,
+            )
+        # scan 仍是 reconcile 后的空快照——失败的合并只改了副本。
+        assert identity.render() == ""
+
+        result = merge_dossier(
+            dossier,
+            scan=scan,
+            drafts=[add_draft()],
+            capture=capture,
+            extractor="mock-v0",
+            now=FIXED,
+        )
+        # 成功合并同样只改副本：scan 的语义是 reconcile 快照，不是合并结果。
+        assert identity.render() == ""
+
+    assert (dossier.root / "about" / "identity.md").read_text(encoding="utf-8") == (
+        "- 厌恶风险 <!-- f_001 -->\n"
+    )
+    entry = next(entry for entry in dossier.read_changelog() if entry.merge == result.merge_id)
+    (patch,) = entry.patches
+    assert patch.id == "f_001"
+    assert patch.result is PatchResult.APPLIED
+    assert commit_count(dossier) == 1
+
+
+def test_failed_merge_then_empty_drafts_retry_writes_no_ghost(
+    tmp_path: Path, git_identity: None
+) -> None:
+    """失败后用 ``drafts=[]`` 走 provider 失败路径：不能写下半应用的补丁。
+
+    这是 P2 的最坏版本：事实在盘上、changelog 却是 ``patches: []``。
+    """
+    dossier = bootstrap_dossier(tmp_path / "me")
+
+    def broken(_documents: object) -> int:
+        raise RuntimeError("estimator exploded")
+
+    with dossier.writer_lock():
+        append = dossier.append_journal([DEFAULT_CAPTURE], now=FIXED)
+        scan = reconcile_dossier(dossier)
+        capture = Capture.from_journal_append(dossier, append)
+        with pytest.raises(RuntimeError, match="exploded"):
+            merge_dossier(
+                dossier,
+                scan=scan,
+                drafts=[add_draft()],
+                capture=capture,
+                extractor="mock-v0",
+                now=FIXED,
+                budget=broken,
+            )
+        result = merge_dossier(
+            dossier,
+            scan=scan,
+            drafts=[],
+            capture=capture,
+            extractor="mock-v0",
+            now=FIXED,
+        )
+
+    assert result.patches == ()
+    assert (dossier.root / "about" / "identity.md").read_text(encoding="utf-8") == ""
+    entry = next(entry for entry in dossier.read_changelog() if entry.merge == result.merge_id)
+    assert entry.patches == []
+    assert commit_count(dossier) == 1
+
+
 def test_invalid_capture_range_writes_nothing(tmp_path: Path, git_identity: None) -> None:
     dossier = bootstrap_dossier(tmp_path / "me")
 

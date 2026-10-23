@@ -356,7 +356,12 @@ sits. These positions were taken during implementation and review.
    failure the files and changelog stay on disk and `GitError` is raised — no
    rollback, because rolling back would discard durable captures. Crash
    recovery is the selective `git checkout -- about/ goals/`, never against
-   `journal/`.
+   `journal/`. Patches are applied to a **deep copy** of the scan documents, so
+   the scan remains the post-reconcile snapshot: a merge that fails before
+   writing (a broken budget estimator, for example) cannot leave applied
+   patches in the scan for a later retry to commit without their changelog
+   records. This does not make a partial write or a commit failure
+   transactional; those still recover through git.
 8. **Evidence is read back from the durable journal.** The shell reads the
    capture range through `Dossier.read_journal_entries` and matches against
    those bytes, not against an in-memory copy held by the extractor. Matching

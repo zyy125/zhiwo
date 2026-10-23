@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence, Set
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -636,6 +637,24 @@ def _apply_link(
 # --- 薄壳：写盘、changelog、提交、预算 -------------------------------------
 
 
+def _clone_documents(
+    documents: Sequence[tuple[Section, FactDocument]],
+) -> tuple[tuple[Section, FactDocument], ...]:
+    """深拷贝 reconcile 交来的文档，让薄壳失败时不污染调用方的 scan。
+
+    :func:`apply_patches` 按设计**就地改写**传入的文档（与 reconcile 的纯
+    核心同一姿态），而 ``merge_dossier`` 的调用方（M7）可能把 scan 保留到
+    错误处理之后。若直接传 ``scan.documents``，一次在预算/条目校验处失败
+    的合并会在 scan 里留下已应用、却从未写进 changelog 的补丁；调用方若
+    按 provider 失败路径复用同一个 scan 再 merge，就会把事实写进盘而
+    changelog 只记 ``patches: []``——provenance 断裂。
+
+    ``deepcopy`` 而不是 ``parse(render())``：保留 ``FactDocument.newline``
+    等解析时确定的字段，逐字节一致由深拷贝直接保证。
+    """
+    return tuple((section, deepcopy(document)) for section, document in documents)
+
+
 def merge_dossier(
     dossier: Dossier,
     *,
@@ -663,6 +682,11 @@ def merge_dossier(
     写序：读 journal 区间 → 应用 → 预算 → 写文档 → 写 changelog → 提交。
     任何一步失败，journal 都已在盘上（capture 永不阻塞）；已经写出的文件
     由 git 作为恢复后盾，不回滚 journal。
+
+    补丁应用在 ``scan.documents`` 的**深拷贝**上（见 :func:`_clone_documents`）：
+    scan 保持 reconcile 之后的内存快照，失败（例如预算估算器抛错）不会在
+    其中留下"已应用但没有 changelog 记录"的补丁。注意这不把失败变成事务
+    ——写盘到一半或提交失败后的恢复仍以 git 为准。
     """
     journal_lines = dossier.read_journal_entries(
         capture.path,
@@ -670,7 +694,7 @@ def merge_dossier(
         last_line=capture.last_line,
     )
     plan = apply_patches(
-        scan.documents,
+        _clone_documents(scan.documents),
         drafts,
         capture=capture,
         journal_lines=journal_lines,
