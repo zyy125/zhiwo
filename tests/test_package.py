@@ -39,6 +39,7 @@ def test_l0_api_is_re_exported() -> None:
         "Marker",
         "atomic_write",
         "bootstrap_dossier",
+        "check_fact_text",
         "git_init",
         "mentioned_fact_ids",
         "mentions_fact_id",
@@ -68,6 +69,23 @@ def test_reconcile_api_is_re_exported() -> None:
         "next_fact_id",
         "reconcile_documents",
         "reconcile_dossier",
+    ):
+        assert name in zhiwo.__all__, name
+        assert getattr(zhiwo, name) is not None, name
+
+
+def test_merge_api_is_re_exported() -> None:
+    """M4 的写路径同样从顶层取用：CLI 与 MCP server 不该记住 merge 的内部划分。"""
+    for name in (
+        "BudgetEstimator",
+        "BudgetStatus",
+        "Capture",
+        "MalformedDraft",
+        "MergeConflict",
+        "MergePlan",
+        "MergeResult",
+        "apply_patches",
+        "merge_dossier",
     ):
         assert name in zhiwo.__all__, name
         assert getattr(zhiwo, name) is not None, name

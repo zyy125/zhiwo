@@ -1,16 +1,19 @@
 """Zhiwo (知我) — 本地优先的个人档案，供被授权的 AI 作为上下文阅读。
 
 本包的磁盘契约见仓库根目录 ``SPEC.md``；实现分层见 ``AGENTS.md``。
-已落地：L1（schema，M1）、L0（store + factfile，M2）与 reconcile
-（SPEC §4 的五种观察 + id 空间，M3）。
+已落地：L1（schema，M1）、L0（store + factfile，M2）、reconcile
+（SPEC §4 的五种观察 + id 空间，M3）与 merge
+（SPEC §3 的唯一写路径：验证 / 分配 id / 应用 / changelog / 提交，M4）。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
-``zhiwo.schema`` / ``zhiwo.store`` / ``zhiwo.factfile`` 的内部划分。
+``zhiwo.schema`` / ``zhiwo.store`` / ``zhiwo.factfile`` / ``zhiwo.merge``
+的内部划分。
 
 分层纪律：``factfile`` 只认字符串，``store`` 是唯一碰磁盘的模块，
 ``models`` 零 I/O——换存储后端只需动 ``store.py``；``reconcile``
-是纯扫描（D-006），读档案走 ``store``、改文档走内存、落盘归调用方。
+是纯扫描（D-006），读档案走 ``store``、改文档走内存、落盘归调用方；
+``merge`` 的纯核心同样零 I/O，只有薄壳在调用方持锁时写盘与提交。
 """
 
 import importlib.metadata
@@ -30,11 +33,23 @@ from zhiwo.factfile import (
     FactLine,
     LineKind,
     Marker,
+    check_fact_text,
     mentioned_fact_ids,
     mentions_fact_id,
     parse_marker,
     render_fact_line,
     render_marker,
+)
+from zhiwo.merge import (
+    BudgetEstimator,
+    BudgetStatus,
+    Capture,
+    MalformedDraft,
+    MergeConflict,
+    MergePlan,
+    MergeResult,
+    apply_patches,
+    merge_dossier,
 )
 from zhiwo.models import (
     Axis,
@@ -90,6 +105,9 @@ except importlib.metadata.PackageNotFoundError:  # pragma: no cover
 __all__ = [
     "Adoption",
     "Axis",
+    "BudgetEstimator",
+    "BudgetStatus",
+    "Capture",
     "ChangelogEntry",
     "ChangelogPatch",
     "Clearance",
@@ -105,10 +123,14 @@ __all__ = [
     "LineKind",
     "Location",
     "LockHeld",
+    "MalformedDraft",
     "Marker",
     "MarkerError",
     "MarkerWarning",
+    "MergeConflict",
+    "MergePlan",
     "MergeRefused",
+    "MergeResult",
     "PatchOp",
     "PatchResult",
     "Profile",
@@ -122,13 +144,16 @@ __all__ = [
     "Sensitivity",
     "ZhiwoError",
     "__version__",
+    "apply_patches",
     "atomic_write",
     "bootstrap_dossier",
     "can_read",
+    "check_fact_text",
     "git_init",
     "load_profile",
     "mentioned_fact_ids",
     "mentions_fact_id",
+    "merge_dossier",
     "next_fact_id",
     "parse_changelog_entry",
     "parse_marker",
