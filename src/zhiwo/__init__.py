@@ -1,6 +1,6 @@
 """Zhiwo (知我) — 本地优先的个人档案，供被授权的 AI 作为上下文阅读。
 
-本包的磁盘契约见仓库根目录 ``SPEC.md``；实现分层见 ``CLAUDE.md``。
+本包的磁盘契约见仓库根目录 ``SPEC.md``；实现分层见 ``AGENTS.md``。
 已落地：L1（schema，M1）、L0（store + factfile，M2）与 reconcile
 （SPEC §4 的五种观察 + id 空间，M3）。
 
