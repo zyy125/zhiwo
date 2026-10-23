@@ -1,4 +1,4 @@
-# CLAUDE.md — project context for Claude Code
+# AGENTS.md — project context for coding agents
 
 ## What this is
 
