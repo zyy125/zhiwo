@@ -161,18 +161,28 @@ class ReconcileReport:
 
 @dataclass(frozen=True, slots=True)
 class ReconcileScan:
-    """薄壳的产出：报告 + 调用方（M4）要落盘的全部文档。
+    """薄壳的产出：报告 + 调用方（M4）要落盘的全部文档 + id 天花板。
 
     ``documents`` 按 profile 分区序返回全部非 journal 事实文档
     （adopt 已就地改写）；M4 全量写回它们即可——round-trip 定律保证
     没被碰过的文件写出逐字节不变的原文。``created`` 是声明了但文件
     缺失的分区（plan §5 步骤 4 的"补建"）：桩文档在这里创建，文件
     本身由调用方写。
+
+    ``known_ids`` 是**收编之后**的保守 id 天花板（plan §3 决策 4 /
+    D-006）：收编改写后的文件里全部注释 span 提及的 id ∪ 全部 changelog
+    id（含 retired 与历史 rejected）。M4 以它为 ``next_fact_id`` 的起点。
+
+    为什么必须由扫描交出、而不是让 M4 自己调 ``Dossier.known_fact_ids``：
+    后者读的是**收编前的盘上文件**，漏掉本轮刚分配的 id。同轮"收编
+    f_052 + 新 add"会让两者都拿到 f_052，直接制造重复 id——而重复 id
+    是 SPEC §4 要求拒绝整次 merge 的情形。
     """
 
     report: ReconcileReport
     documents: tuple[tuple[Section, FactDocument], ...]
     created: tuple[Section, ...]
+    known_ids: frozenset[str]
 
 
 def next_fact_id(known_ids: Set[str]) -> str:
@@ -455,8 +465,19 @@ def reconcile_dossier(dossier: Dossier) -> ReconcileScan:
         retired_ids=retired_ids,
         created_ids=created_ids,
     )
+    # id 天花板的文件侧必须在**收编之后**取：收编把新 id 写进了内存文档，
+    # 但尚未落盘，而 Dossier.known_fact_ids 读的正是盘上旧文件。逐份看
+    # render() 还有一个好处——坏 marker 与散文注释里的提及也算在场
+    # （D-006 的保守方向：宁可跳号，绝不复用）。
+    file_ids: set[str] = set()
+    for _, document in documents:
+        file_ids |= mentioned_fact_ids(document.render())
+    known_ids = frozenset(
+        file_ids | changelog_ids | {adoption.fact_id for adoption in report.adopted}
+    )
     return ReconcileScan(
         report=report,
         documents=tuple(documents),
         created=tuple(created),
+        known_ids=known_ids,
     )

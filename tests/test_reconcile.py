@@ -183,6 +183,24 @@ def test_adopts_get_sequential_ids_in_profile_then_line_order(
     assert "- 再收编的行 <!-- f_053 locked -->\n" in values.render()
 
 
+def test_scan_known_ids_covers_adoptions_and_is_the_next_ceiling(
+    copy_dossier: Path, dossier: Dossier
+) -> None:
+    """M4 的交接面：收编后 id 天花板必须包含**尚未落盘**的新 id。
+
+    用 ``dossier.known_fact_ids()`` 会漏掉本轮收编（它读盘上旧文件），
+    M4 的 add 于是又拿到 f_052——正是 SPEC §4 的重复 id。这里把
+    "下一个号必须是 f_053"钉在扫描的产出上。
+    """
+    append_line(copy_dossier, "about/career.md", "- 手写的一条新事实\n")
+    scan = reconcile_dossier(dossier)
+
+    (adoption,) = scan.report.adopted
+    assert adoption.fact_id == "f_052"
+    assert "f_052" in scan.known_ids
+    assert next_fact_id(scan.known_ids) == "f_053"
+
+
 def test_unadoptable_hand_written_line_is_quarantined() -> None:
     """含 ``~~`` 的手写行写不成合法事实行 → 隔离，不崩溃、不改写。
 
@@ -248,6 +266,8 @@ def test_retire_changelog_known_id_missing(copy_dossier: Path, dossier: Dossier)
     # 扫描不写者：盘上的文件保持我们删完之后的样子。
     assert career.read_text(encoding="utf-8") == deleted
     assert not scan.report.adopted
+    # 退休的 id 仍在天花板里（changelog 记账）——never resurrected。
+    assert "f_051" in scan.known_ids
 
 
 def test_wikilink_mention_does_not_block_retire(copy_dossier: Path, dossier: Dossier) -> None:
@@ -597,6 +617,11 @@ def test_golden_dossier_reconciles_to_a_noop(dossier: Dossier) -> None:
     for relative in ("about/values.md", "about/career.md", "goals/current.md"):
         document = next(doc for section, doc in scan.documents if section.path == relative)
         assert document.render() == (dossier.root / relative).read_text(encoding="utf-8")
+    # id 天花板 = 文件里出现过的 id ∪ changelog 里出现过的 id；文件侧包含
+    # 散文注释里的提及（career.md 的 ``me why f_051``）——保守，绝不复用。
+    assert scan.known_ids == frozenset(
+        {"f_001", "f_002", "f_003", "f_009", "f_017", "f_042", "f_043", "f_044", "f_051"}
+    )
 
 
 # --- id 空间（plan §3 决策 4）-----------------------------------------------
