@@ -260,6 +260,12 @@ class ChangelogPatch(BaseModel):
     同一姿态。M3 落地后契约里的 op 已全部有 _REQUIRED_BY_OP 表行
     （含 §4 的 adopt/retire，D-006），但本模型对新 op 依旧宽容——
     "读取器必须认识每个 op"约束的是**写出侧**，不是读取侧。
+
+    ``result: rejected|skipped`` 的记录是**拒绝的证据**，不是已应用的补丁：
+    一条缺 evidence 的 add 正是硬规则 4 要拦的东西，它本身的形态就不完整
+    （否则也不会被拒）。因此 ``_check_required_for_op`` 只对 applied 记录
+    强制整套字段；拒绝/跳过只需 ``reason``（M4，D-007）。这不是放松边界
+    ——边界正是"它没能成为一条事实"，记录里的 reason 才是审计对象。
     """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -291,10 +297,26 @@ class ChangelogPatch(BaseModel):
         没有权威来源的压缩。因此这几个字段的类型都带 ``min_length=1``
         （见 NonEmptyStr 与 members 的 Field），把关口留在结构层。
 
+        **拒绝/跳过是另一类记录**（plan §3 决策 10）：它们记录的是
+        "这条草稿没能成为事实"，而它失败的原因往往正是字段缺失或形态
+        不合法（缺 evidence、target 未声明、locked 目标……）。若仍按
+        已应用形态强制整套字段，硬规则 4 拦下的东西就永远无法留下审计
+        痕迹——这与决策 10 直接冲突。因此这里只要求 ``reason``：
+        拒绝记录的可读理由就是它全部的信息价值。applied / None 仍走
+        原来的 op 必填表，硬规则 4 的第二道闸门（M4 的逐字校验）不受影响。
+
         缺行兜底按"无必填字段"处理（``.get``）：契约里的 op 今天已全部
         有表行（含 §4 的 adopt/retire），但 v2 若新增 op，旧代码遇到新
         op 时应该继续可读——写侧闸门在新代码里，不在读取器里。
         """
+        if self.result in (PatchResult.REJECTED, PatchResult.SKIPPED):
+            if self.reason is None:
+                raise ValueError(
+                    f"op {self.op.value!r} with result {self.result.value!r} "
+                    "requires reason (plan §3 decision 10: a refusal is recorded "
+                    "by why it was refused)"
+                )
+            return self
         required = _REQUIRED_BY_OP.get(self.op, ())
         missing = [f for f in required if getattr(self, f) is None]
         if missing:
