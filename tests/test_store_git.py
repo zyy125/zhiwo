@@ -5,7 +5,6 @@ M2 只提供原语：``git init`` 与"把工作区提交成一个提交"。**每
 一次提交、工作区干净、作者身份来自用户（测试用环境变量解决）。
 """
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -13,24 +12,6 @@ import pytest
 
 from zhiwo.errors import GitError
 from zhiwo.store import Dossier, bootstrap_dossier
-
-
-@pytest.fixture
-def git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """给测试一套自足的 git 身份，**不让测试依赖开发机的全局配置**。
-
-    ``GIT_CONFIG_GLOBAL`` 指向空设备 + ``GIT_CONFIG_NOSYSTEM``：这台机器
-    的 ``~/.gitconfig`` 里可能有 ``commit.gpgsign = true`` 之类的设置，
-    那会让测试因为"没配 GPG 密钥"而红——红得毫无信息量。生产代码不碰
-    身份（那是用户的），测试自己把环境铺好。
-    """
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "Zhiwo Test")
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
-    monkeypatch.setenv("GIT_COMMITTER_NAME", "Zhiwo Test")
-    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
-    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
 
 
 def _git(root: Path, *args: str) -> str:
