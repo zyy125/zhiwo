@@ -290,3 +290,112 @@ changelog") defines a new op rather than reusing `retire`, the
 `retired_ids` derivation in the shell must learn it — flagged for M4.
 `MergeRefused`'s docstring stays accurate: duplicates remain its only
 source.
+
+## D-007 — M4 merge core: draft border, id ceiling, append-only apply, and the budget seam
+
+**Date:** 2026-10-23 · **Status:** accepted
+
+**Context.** M4 implemented `merge.py` (plan §5 steps 6–11: validation, id
+assignment, apply, changelog, commit, budget hook). SPEC defines patch
+semantics but leaves several implementation choices open: how untrusted drafts
+are shaped, what a rejection record looks like when the rejected patch is
+itself malformed, where the id ceiling comes from after same-merge adoptions,
+how multiple patches against one target interact, and where the budget check
+sits. These positions were taken during implementation and review.
+
+**Decision.**
+
+1. **The draft border is M4, and drafts are raw mappings.** Extract (M5)
+   returns the parsed patch array as `Sequence[object]`; merge validates every
+   entry. `id`, `source`, `result`, and `reason` in a draft are ignored —
+   identity and provenance are produced only by the merger (SPEC §3). A draft
+   whose `op` cannot be identified becomes a `MalformedDraft` in the result,
+   not a changelog record: the changelog's `op` is a closed vocabulary, so
+   there is no patch shape to record. This is the one deliberate
+   report-only path; the CLI must print it, and extract should never produce it.
+2. **A rejection is a minimal changelog record.** `ChangelogPatch` now enforces
+   the per-op required fields only for `applied` records (including the default
+   `result`); `rejected` and `skipped` records require `reason` and may omit
+   the applied shape. Otherwise the most important refusals — a missing
+   `evidence`, an undeclared target — could never be recorded, contradicting
+   plan §3 decision 10. Applied records keep hard rule 4 intact, and no new
+   on-disk field is introduced. Invalid values are quoted in `reason`; only
+   individually well-typed fields are salvaged into the record.
+3. **The id ceiling is the post-adoption scan.** `ReconcileScan.known_ids` is
+   the conservative set computed after reconcile has rewritten its in-memory
+   documents: every comment-span mention in those files (damaged markers and
+   prose mentions included, wikilinks stripped) union every changelog id.
+   Calling `Dossier.known_fact_ids()` here would read the pre-adoption disk
+   and let a same-merge adoption and a new add both take the same number. Only
+   accepted `add`/`supersede` patches consume an id; rejected/skipped/link
+   records do not. A collision with an existing fact raises `ZhiwoError`
+   rather than silently renumbering.
+4. **Validation and application are one sequential pass.** Each accepted draft
+   changes the state the next draft is checked against. Consequently two
+   statement supersedes of the same target resolve as "first applies, second is
+   rejected (target no longer active)", while two inference supersedes coexist
+   (the target stays active and both edges are inert until review). This is
+   deterministic given draft order and avoids validating against one state and
+   applying against another.
+5. **New fact lines are appended, never inserted.** A supersede rewrites the
+   target line in place (same line number) and appends the new line at the end
+   of that file. Inserting would shift the line numbers of later facts and
+   invalidate existing `path#L<n>` adopt sources (D-006). The cost — a
+   supersede pair is not necessarily adjacent — is accepted.
+6. **References resolve against parsed facts; absence means unknown or
+   archived.** There is no separate archived set in merge: a retired id is
+   simply not in any file. `supersede` additionally requires the target to be
+   `active`; `link` requires both ends to exist and the source not to be
+   locked. A locked target is rejected and flagged (`MergeConflict`), never
+   auto-superseded, in either direction and for both statement and inference.
+7. **The caller owns the lock; one merge is one commit.** `merge_dossier`
+   assumes `Dossier.writer_lock()` is held across journal append → reconcile →
+   extract → merge. It does not acquire a second lock. Write order is
+   documents → changelog → one `git add -A` commit with subject
+   `merge: <merge_id>`; the journal append rides that commit. On commit
+   failure the files and changelog stay on disk and `GitError` is raised — no
+   rollback, because rolling back would discard durable captures. Crash
+   recovery is the selective `git checkout -- about/ goals/`, never against
+   `journal/`. Patches are applied to a **deep copy** of the scan documents, so
+   the scan remains the post-reconcile snapshot: a merge that fails before
+   writing (a broken budget estimator, for example) cannot leave applied
+   patches in the scan for a later retry to commit without their changelog
+   records. This does not make a partial write or a commit failure
+   transactional; those still recover through git.
+8. **Evidence is read back from the durable journal.** The shell reads the
+   capture range through `Dossier.read_journal_entries` and matches against
+   those bytes, not against an in-memory copy held by the extractor. Matching
+   is whitespace-collapsed containment (any Unicode whitespace → one space),
+   first occurrence, per-line first and then across the range; a cross-line hit
+   points at its starting line. Evidence outside the capture range is rejected.
+   This keeps the `#L<n>` source pointer truthful.
+9. **The budget hook is an injected pure estimator.** Merge receives
+   `BudgetEstimator` (post-merge documents → high-clearance reader-view token
+   count), compares it to `profile.core_budget_tokens`, and returns
+   `BudgetStatus`; it runs before any disk write so a broken estimator cannot
+   leave a half merge. Over-budget never blocks or defers (D-002) and adds no
+   changelog field; M6 supplies the estimator and M7 renders the loud warning.
+   When no estimator is injected the status is `None`, which makes the missing
+   wiring visible in M7's smoke test.
+10. **Review finalization remains M8.** Confirm/edit/reject share the private
+    write/changelog/commit tail, but their semantics and the changelog op for a
+    review rejection (reusing `retire` versus adding a new op) are M8's
+    decision; `ReconcileScan`'s `known_ids` is already the right handoff for
+    it. D-006's flag about `retired_ids` learning a new op remains open.
+
+**Why.** The recurring question is *which artefact owns this fact*: the raw
+draft is untrusted input, the merger owns identity and provenance, the
+post-adoption files own the id ceiling, the append-only file owns line
+addresses, the journal owns evidence, and the caller owns the write lock. Every
+choice above names the owner explicitly instead of letting whichever code path
+runs first decide. Rejections are data because the changelog is the audit of
+the border; malformed drafts that cannot name an op are the one thing that
+cannot be a patch record, and they are surfaced rather than hidden.
+
+**Consequences.** M6 must implement the estimator against the post-merge
+document list (pending and superseded excluded) and M7 must inject it; until
+then over-budget is not detected. M8 can reuse `_write_merge` and
+`Capture.from_journal_append` patterns but will need a capture-less input label
+for review merges. `ChangelogPatch` readers now accept minimal rejection
+records; no released reader exists to break. The contract (`SPEC.md`) and
+`profile.yaml` are unchanged.

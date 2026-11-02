@@ -306,6 +306,52 @@ def test_rejected_patch_records_reason() -> None:
     assert patch.reason == "evidence not found in input"
 
 
+def test_rejected_patch_may_omit_applied_shape() -> None:
+    """拒绝记录只需 op/result/reason（M4，D-007）。
+
+    缺 evidence 的 add 正是硬规则 4 要拦下的东西——它被拦下的原因就是
+    形态不完整。若拒绝记录仍强制整套 applied 字段，决策 10 的"拒绝也
+    记账"将永远无法实现：最该被审计的那些拒绝恰好写不进去。
+    """
+    patch = ChangelogPatch.model_validate(
+        {"op": "add", "result": "rejected", "reason": "draft 0: evidence is empty"}
+    )
+    assert patch.result is PatchResult.REJECTED
+    assert patch.id is None
+    assert patch.evidence is None
+    assert patch.text is None
+
+
+def test_skipped_patch_still_requires_reason() -> None:
+    """跳过是"合法但无效果"，理由必须能解释为什么无效果。"""
+    with pytest.raises(ValidationError, match="reason"):
+        ChangelogPatch.model_validate(
+            {"op": "link", "from": "f_042", "to": "f_017", "result": "skipped"}
+        )
+    patch = ChangelogPatch.model_validate(
+        {
+            "op": "link",
+            "from": "f_042",
+            "to": "f_017",
+            "result": "skipped",
+            "reason": "link already present",
+        }
+    )
+    assert patch.result is PatchResult.SKIPPED
+    assert patch.from_fact == "f_042"
+
+
+def test_rejected_patch_still_requires_reason() -> None:
+    with pytest.raises(ValidationError, match="reason"):
+        ChangelogPatch.model_validate({"op": "add", "result": "rejected"})
+
+
+def test_applied_patch_still_requires_the_full_shape() -> None:
+    """拒绝记录的放宽不得泄漏到已应用记录：硬规则 4 的闸门原样保留。"""
+    with pytest.raises(ValidationError, match="requires"):
+        ChangelogPatch.model_validate({"op": "add", "result": "applied", "reason": "not enough"})
+
+
 def test_unknown_patch_keys_are_ignored() -> None:
     patch = ChangelogPatch.model_validate(make_add_patch(confidence=0.9))
     assert not hasattr(patch, "confidence")

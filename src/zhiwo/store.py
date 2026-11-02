@@ -30,7 +30,7 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -245,6 +245,71 @@ class Dossier:
             first_line=first_line,
             last_line=first_line + len(lines) - 1,
         )
+
+    def read_journal_entries(
+        self, relative_path: str, *, first_line: int, last_line: int
+    ) -> tuple[str, ...]:
+        """读回 journal 的一个行区间，返回**捕获文本**（去掉 ``- `` 前缀）。
+
+        为什么 M4 要重新读盘，而不是直接用 extractor 手里的输入字符串：
+        changelog 里的 ``source: journal/2026-10-11.md#L7`` 是对**盘上字节**
+        的承诺。若拿内存里的副本做逐字校验，一旦它与持久化的 journal 有
+        任何差异，changelog 就会指向一行并不包含该证据的文字——provenance
+        从根上断裂。因此证据校验的 haystack 必须是这里读回来的内容。
+
+        行号是 1-based 的绝对行号，与 ``append_journal`` 返回的
+        ``JournalAppend`` 以及 ``#L<n>`` 指针同一坐标系（SPEC §2.4：
+        journal 只追加，所以这些指针永不漂移）。
+
+        边界规则：
+
+        - 路径必须是**档案根目录下的相对 POSIX 路径**，且位于 profile
+          声明的 journal 目录内。``..``、绝对路径、反斜杠、解析后逃出
+          journal 目录（含符号链接）一律 :class:`~zhiwo.errors.ZhiwoError`
+          ——source 指针只能是 journal 里的行。
+        - 区间必须完整落在文件内：越界不是"返回空"，而是调用方对不上
+          journal 的 bug，必须响亮失败（否则证据校验会对着空气通过）。
+        - 行以 ``- `` 开头则剥掉该前缀（store 写 journal 的固定形态）；
+          手改掉项目符号的行原样返回，让证据仍有机会匹配。行终止符由
+          ``splitlines()`` 去掉。
+        - 读失败/非 UTF-8 归一为 ``SchemaError``，与 L0 的其余读取一致。
+        """
+        if first_line < 1 or last_line < first_line:
+            raise ZhiwoError(
+                f"invalid journal range L{first_line}-L{last_line} "
+                f"in {relative_path} (expected 1 <= first <= last)"
+            )
+        candidate = PurePosixPath(relative_path)
+        if (
+            candidate.is_absolute()
+            or not candidate.parts
+            or "\\" in relative_path
+            or any(part in {"", ".", ".."} for part in candidate.parts)
+            # PurePosixPath 会静默把 "./" 之类的段规整掉，导致"非规范路径"
+            # 与规范路径视为同一个文件；source 指针是可读的契约文本，
+            # 要求它逐字规范，避免两个写法指向同一行却看起来不同。
+            or candidate.as_posix() != relative_path
+        ):
+            raise ZhiwoError(
+                f"journal capture path must be a relative POSIX path inside the "
+                f"journal directory: {relative_path!r}"
+            )
+
+        journal_dir = self.journal_dir().resolve()
+        path = (self.root / relative_path).resolve()
+        if not path.is_relative_to(journal_dir):
+            raise ZhiwoError(
+                f"journal capture path escapes the journal directory: "
+                f"{relative_path!r} (journal is {journal_dir})"
+            )
+
+        lines = _read_text(path).splitlines()
+        if len(lines) < last_line:
+            raise ZhiwoError(
+                f"journal range L{first_line}-L{last_line} is out of bounds: "
+                f"{relative_path} has {len(lines)} line(s)"
+            )
+        return tuple(_journal_entry_text(line) for line in lines[first_line - 1 : last_line])
 
     # --- changelog ------------------------------------------------------
 
@@ -508,6 +573,15 @@ def _journal_line(line: str) -> str:
     if "\n" in line or "\r" in line:
         raise ZhiwoError(f"journal line must be a single line: {line!r}")
     return stripped
+
+
+def _journal_entry_text(line: str) -> str:
+    """把盘上的一行 journal 还原成捕获文本（去掉 store 写的 ``- `` 前缀）。
+
+    有前缀就去掉一次；没有前缀（手改过的行）原样返回——证据校验的职责是
+    "这段文字在不在这一行里"，而不是替人修 journal 的格式。
+    """
+    return line[2:] if line.startswith("- ") else line
 
 
 def _fsync_directory(directory: Path) -> None:

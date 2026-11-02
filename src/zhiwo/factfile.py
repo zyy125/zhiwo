@@ -353,6 +353,21 @@ def render_fact_line(
     return f"- {body} <!-- {render_marker(marker)} -->{newline}"
 
 
+def check_fact_text(text: str) -> None:
+    """公开的写侧文本闸门（plan §8 R15 的全部条款）。
+
+    与 :func:`render_fact_line` 内联的检查是同一套实现，单独暴露是为了让
+    调用方在**分配 id、改写文档之前**就能判断一段文本能不能写成事实行。
+    M4 的 merge 正是这样用的：先检查再分配，失败的补丁不消耗 id、不在
+    内存文档里留下半改写（与 D-006 的"失败收编不消耗 id"同一原则）。
+
+    解析侧刻意不对称：读进来的一行可能永远不合法（手改坏的行是预期数据，
+    走 quarantine），但**写出去**的文本必须能原样再解析回来。因此这里
+    失败一律 :class:`~zhiwo.errors.MarkerError`，由调用方转成拒绝记录。
+    """
+    _check_fact_text(text)
+
+
 def mentions_fact_id(text: str, fact_id: str) -> bool:
     """整份文件文本里是否**存在**对这个 id 的提及（plan §8 R8 的存在性检查）。
 

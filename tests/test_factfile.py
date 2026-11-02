@@ -16,6 +16,7 @@ from zhiwo.factfile import (
     FactLine,
     LineKind,
     Marker,
+    check_fact_text,
     mentioned_fact_ids,
     mentions_fact_id,
     parse_marker,
@@ -414,6 +415,19 @@ def test_render_fact_line_rejects_grammar_breaks(text: str) -> None:
     """plan §8 R15：会让行文法不可逆的文本，在写出前就拒绝。"""
     with pytest.raises(MarkerError):
         render_fact_line(text, Marker("f_001"))
+
+
+def test_check_fact_text_is_the_same_gate_without_rendering() -> None:
+    """公开闸门给 M4 用：分配 id / 改写文档之前就能判定文本合法性。
+
+    它必须与渲染路径判得一模一样——否则 merge 会先分 id、再在渲染时
+    失败，凭空消耗一个 id（D-006 的"失败不消耗 id"被破坏）。
+    """
+    check_fact_text("厌恶风险，偏好确定性")
+    check_fact_text("带 [[f_051]] 链接的事实")  # 链接是合法文本
+    for broken in ("", "   ", "带\n换行", "含 ~~ 划线", "前导空格 ", " 尾随空格"):
+        with pytest.raises(MarkerError):
+            check_fact_text(broken)
 
 
 @pytest.mark.parametrize("struck", [False, True])
