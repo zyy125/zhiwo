@@ -464,3 +464,79 @@ supply a stable core-view string; if its rendering changes, the prompt
 snapshot and recording hashes are expected to be re-recorded deliberately.
 M9 adds the network client behind the same `Provider` protocol. The contract
 (`SPEC.md`) and `profile.yaml` are unchanged.
+
+## D-009 — M6 recall: one join, two views, and the reader boundary
+
+**Date:** 2026-11-03 · **Status:** accepted
+
+**Context.** M6 implemented `recall.py` (L4): core/reader views, the token
+estimator consumed by M4's budget hook, journal keyword search, the §2.1
+logical-record join, and provenance. SPEC defines those concepts but leaves
+the rendering format, the join's fallback values, the tokenizer, and the
+source-context lookup open. D-008 also assigned M6 ownership of `core_view`
+and warned that a rendering change re-records M5's prompt fixtures.
+
+**Decision.**
+
+1. **Both views are pure renderers over `(Section, FactDocument)`; only the
+   thin shells read disk.** `load_documents` delegates to `store`; rendering,
+   token counting, join, search and provenance operate on in-memory data.
+   The core view follows SPEC §2.3 literally: active + pending only, locked
+   as an annotation, `supersedes` edges shown (including inert pending ones).
+   Superseded and archived facts are excluded. The reader view keeps active
+   facts only, filters sections through `can_read`, excludes the journal at
+   **every** clearance (plan §6), omits empty sections, and carries no ids or
+   markers.
+2. **The budget estimator is the high-clearance reader view.** The heuristic
+   stays plan §3 decision 5: `CJK chars × 1 + ceil(other / 4)`. M4 receives
+   `estimate_reader_tokens` through its existing `BudgetEstimator` seam; the
+   estimator counts the maximal (high-clearance) view, never the normal one.
+3. **The logical record splits ownership exactly as §2.1 says.** Files own
+   text, live status, `locked` and relation edges; applied changelog creation
+   events own `kind` and `source`; `created` is the earliest applied event
+   date and `updated` the latest. Dates come from the ISO date in the merge
+   id, which tolerates the golden example's `m_` prefix (R5). Rejected and
+   skipped events are provenance only — they never move status or dates.
+   Missing history stays `None` rather than being inferred from pending flags
+   or file mtimes. `archived` requires an applied `retire`, a creation event,
+   and absence from every file (D-006's tombstone rule). Duplicate ids raise
+   `ZhiwoError` naming both locations; read-side code never picks one.
+4. **Journal search is a high-clearance capability over captures only.**
+   `Dossier.journal_entries()` skips headings, blank lines and HTML comments
+   while preserving absolute line numbers. Tokenization splits on Unicode
+   P*/Z* (plus control characters), folds case, and generates CJK bigrams
+   only inside contiguous CJK runs — never across punctuation. Ranking is the
+   distinct intersection of query and line tokens; ties are newest-first.
+   `top_n` defaults to 5 and must be positive; normal clearance returns an
+   empty tuple.
+5. **Provenance returns all events touching an id, with context read through
+   L0.** Touching means `id`, `target_id`, `from`, `to` or `members`; wikilink
+   mentions in text are not events. Context is the source line ±1, read by
+   `Dossier.read_line_context` for any dossier-relative path, because `adopt`
+   sources point at fact files (D-006), not journals. A broken source pointer
+   becomes `context_error` data; it does not suppress the event or its
+   evidence.
+6. **M5's core-view fixture was regenerated deliberately.** The old fixture
+   contained a superseded fact, which contradicts both SPEC §2.3 and the
+   prompt's own rule 9. `core_view.txt` and `prompt.txt` lost that line, and
+   `cjk.jsonl`'s prompt hash was updated; a recall test now asserts the
+   fixture is exactly the production renderer's output, so the seam cannot
+   drift silently (D-008's re-record path).
+7. **The 5k join benchmark is disk-backed and generous.** Five thousand
+   facts and five thousand changelog files join in about 4.4 s on the
+   development machine; the test budget is 10 s to absorb CI variance. A real
+   regression (an O(n²) join) will blow past it. If it ever goes red, pull
+   `me index rebuild` forward — do not add an in-memory cache and call it an
+   index. `.index/` remains disposable and unpersisted.
+
+**Why.** Every choice names the artefact that owns the answer: the file owns
+the live fact, the changelog owns what happened, the store owns disk access,
+and the reader boundary owns what a clearance may see. Guessing a missing
+`kind` from a marker, serving journal hits to normal readers, or letting a
+broken provenance pointer hide evidence would each create a second authority
+for something the contract already places elsewhere.
+
+**Consequences.** M7 composes `load_documents` + `render_core_view` for
+extract and injects `estimate_reader_tokens` into `merge_dossier`; M8 uses
+`render_reader_view`, `search_journal` and `provenance` for export/ask/why.
+No `SPEC.md` or `profile.yaml` semantics changed.
