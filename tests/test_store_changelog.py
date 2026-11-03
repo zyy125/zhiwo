@@ -64,9 +64,7 @@ def test_same_second_collision_entries_read_in_write_order(dossier: Dossier) -> 
     second = dossier.write_changelog(_entry(evidence="第二次"), now=FIXED)
 
     entries = [
-        entry
-        for entry in dossier.read_changelog()
-        if entry.merge in {first.stem, second.stem}
+        entry for entry in dossier.read_changelog() if entry.merge in {first.stem, second.stem}
     ]
 
     assert [entry.merge for entry in entries] == [first.stem, second.stem]

@@ -64,9 +64,7 @@ def _deferred_dossier(tmp_path: Path) -> Dossier:
     review 的两行改写有真实的落盘坐标与 changelog 创建事件。
     """
     dossier = bootstrap_dossier(tmp_path / "me")
-    (dossier.root / "about" / "values.md").write_text(
-        "- 想读博 <!-- f_009 -->\n", encoding="utf-8"
-    )
+    (dossier.root / "about" / "values.md").write_text("- 想读博 <!-- f_009 -->\n", encoding="utf-8")
     outcome = capture(
         dossier,
         CAPTURE,
@@ -165,9 +163,7 @@ def test_target_change_blocks_the_edge_then_allows_standalone_confirm(
     assert "- 想读博 <!-- f_009 locked -->" in values
     assert "- 也许该直接工作 <!-- f_011 supersedes:f_009 pending -->" in values
 
-    standalone = review_pending(
-        dossier, "f_011", ReviewAction.CONFIRM, standalone=True, now=FIXED
-    )
+    standalone = review_pending(dossier, "f_011", ReviewAction.CONFIRM, standalone=True, now=FIXED)
 
     assert standalone.merge is not None
     values = values_path.read_text(encoding="utf-8")
@@ -215,9 +211,7 @@ def test_edit_locks_the_fact_and_drops_the_deferred_edge(
     assert by_id["f_011"].supersedes is None
 
 
-def test_edit_rejects_text_that_breaks_the_line_grammar(
-    tmp_path: Path, git_identity: None
-) -> None:
+def test_edit_rejects_text_that_breaks_the_line_grammar(tmp_path: Path, git_identity: None) -> None:
     dossier = _deferred_dossier(tmp_path)
     changelog_before = {path.name for path in (dossier.root / "changelog").glob("*.yaml")}
     commits_before = _commit_count(dossier.root)
@@ -259,9 +253,7 @@ def test_reject_removes_the_line_and_archives_via_changelog(
     assert all(item.fact_id != "f_011" for item in scan.report.retired)
 
 
-def test_review_reconciles_hand_edits_in_the_same_merge(
-    tmp_path: Path, git_identity: None
-) -> None:
+def test_review_reconciles_hand_edits_in_the_same_merge(tmp_path: Path, git_identity: None) -> None:
     """review 也是 merge：锁内的 reconcile 会收编这次决定之前的手写行。"""
     dossier = _deferred_dossier(tmp_path)
     values_path = dossier.root / "about" / "values.md"
@@ -290,9 +282,7 @@ def test_non_pending_facts_cannot_be_reviewed(tmp_path: Path, git_identity: None
 def test_first_deferred_confirmation_wins(tmp_path: Path, git_identity: None) -> None:
     """OQ#4：两条 pending 指向同一目标时，第二条必须重新走 target_changed。"""
     dossier = bootstrap_dossier(tmp_path / "me")
-    (dossier.root / "about" / "values.md").write_text(
-        "- 想读博 <!-- f_009 -->\n", encoding="utf-8"
-    )
+    (dossier.root / "about" / "values.md").write_text("- 想读博 <!-- f_009 -->\n", encoding="utf-8")
     response = json.dumps(
         [
             {

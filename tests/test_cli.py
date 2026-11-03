@@ -217,9 +217,7 @@ def test_provider_failure_still_commits_the_journal(tmp_path: Path, git_identity
     assert _commit_count(root) == 1
 
 
-def test_review_is_a_registered_command_not_capture(
-    tmp_path: Path, git_identity: None
-) -> None:
+def test_review_is_a_registered_command_not_capture(tmp_path: Path, git_identity: None) -> None:
     """``me review`` 不能再被"未知词 → 捕获"吞掉。"""
     root = bootstrap_dossier(tmp_path / "me").root
 
@@ -279,6 +277,7 @@ def test_review_falls_back_to_line_input_without_a_terminal(
     dossier: Dossier, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """没有 /dev/tty 时按键读取退回 stdin 行首字符，而不是抛 OSError。"""
+
     def no_tty(echo: bool = False) -> str:
         raise OSError("no controlling terminal")
 

@@ -517,9 +517,7 @@ def answer_question(context: AskContext, provider: Provider) -> AskResult:
         raise ZhiwoError("provider identity must be a non-empty string")
     answer = provider.complete(build_ask_prompt(context))
     if not isinstance(answer, str):
-        raise ProviderError(
-            f"provider {identity!r} returned {type(answer).__name__}, expected str"
-        )
+        raise ProviderError(f"provider {identity!r} returned {type(answer).__name__}, expected str")
     return AskResult(question=context.question, answer=answer, provider=identity, context=context)
 
 
