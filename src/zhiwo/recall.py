@@ -460,9 +460,7 @@ def provenance(dossier: Dossier, fact_id: str) -> tuple[ProvenanceEvent, ...]:
 # --- 内部工具：共享的视图/检索基础 ------------------------------------------
 
 
-def _load_documents(
-    dossier: Dossier, profile: Profile
-) -> tuple[tuple[Section, FactDocument], ...]:
+def _load_documents(dossier: Dossier, profile: Profile) -> tuple[tuple[Section, FactDocument], ...]:
     """``load_documents`` 的共用实现；``profile`` 已由调用方读过。
 
     保留此函数是为了让 ``logical_records`` 复用同一份 profile，避免在一次

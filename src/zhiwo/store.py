@@ -419,8 +419,7 @@ class Dossier:
         lines = _read_text(path).splitlines()
         if line_no < 1 or line_no > len(lines):
             raise ZhiwoError(
-                f"source line L{line_no} is out of bounds: "
-                f"{relative_path} has {len(lines)} line(s)"
+                f"source line L{line_no} is out of bounds: {relative_path} has {len(lines)} line(s)"
             )
         start = max(1, line_no - radius)
         end = min(len(lines), line_no + radius)
