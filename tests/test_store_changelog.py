@@ -53,6 +53,26 @@ def test_filenames_carry_seconds_and_never_overwrite(dossier: Dossier) -> None:
     assert all(path.is_file() for path in (first, second, third))
 
 
+def test_same_second_collision_entries_read_in_write_order(dossier: Dossier) -> None:
+    """``-2`` 后缀必须排在基础条目之后，而不是被路径字典序挤到前面。
+
+    capture 与紧接着的 review 合并常常落在同一秒（plan §3 决策 8）；
+    读顺序如果错了，logical record 的 updated 日期与"最新事件"都会指向
+    更早的那次 merge。
+    """
+    first = dossier.write_changelog(_entry(evidence="第一次"), now=FIXED)
+    second = dossier.write_changelog(_entry(evidence="第二次"), now=FIXED)
+
+    entries = [
+        entry
+        for entry in dossier.read_changelog()
+        if entry.merge in {first.stem, second.stem}
+    ]
+
+    assert [entry.merge for entry in entries] == [first.stem, second.stem]
+    assert [entry.patches[0].evidence for entry in entries] == ["第一次", "第二次"]
+
+
 def test_the_merge_id_is_the_filename_stem(dossier: Dossier) -> None:
     """SPEC §1：条目里的 merge 与文件名 stem 一致——由写入方保证，不靠调用方。"""
     path = dossier.write_changelog(_entry(merge="我瞎填的"), now=FIXED)

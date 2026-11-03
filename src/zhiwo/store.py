@@ -428,16 +428,24 @@ class Dossier:
     # --- changelog ------------------------------------------------------
 
     def read_changelog(self) -> list[ChangelogEntry]:
-        """读全部 changelog 条目，按文件名排序（= 时间序，SPEC §1）。
+        """读全部 changelog 条目，按时间序排列（SPEC §1）。
 
         读取器**接受任意 stem 精度**（plan §8 R5）：写入用秒，但黄金示例是
         分钟精度，读者的宽容度不该小于写入者。缺目录 → 空列表（一个还没
         发生过 merge 的档案是合法的）。
+
+        同一秒的碰撞后缀 ``-2`` 按数字序号排在基础条目之后（见
+        :func:`_changelog_sort_key`）：review 决策通常紧跟在捕获之后，
+        路径字典序会让"后发生的 merge"看起来像先发生。
         """
         if not self.changelog_dir.is_dir():
             return []
         entries: list[ChangelogEntry] = []
-        for path in sorted(self.changelog_dir.glob("*.yaml")):
+        # 不能直接按路径字符串排序：同秒的 ``...-2.yaml`` 里 '-' 的码位小于
+        # '.'，会让后缀条目排到基础条目**前面**，而 review 正是"捕获后
+        # 紧接着的一次 merge"（plan §3 决策 8）最常见的同秒场景。按
+        # (时间戳 stem, 后缀序号) 排，基础条目永远是 1，``-2`` 紧随其后。
+        for path in sorted(self.changelog_dir.glob("*.yaml"), key=_changelog_sort_key):
             source = str(path)
             entries.append(
                 parse_changelog_entry(parse_yaml(_read_text(path), source=source), source=source)
@@ -693,6 +701,21 @@ def bootstrap_dossier(root: Path) -> Dossier:
 
 
 # --- 内部工具 -------------------------------------------------------------
+
+
+def _changelog_sort_key(path: Path) -> tuple[str, int]:
+    """changelog 的时间序：``stem`` + 同秒后缀序号。
+
+    ``write_changelog`` 的命名是 ``YYYY-MM-DDThhmmss[-N].yaml``。路径
+    字典序会把 ``...-2`` 排在 ``....yaml`` 之前（``-`` < ``.``），而
+    review 决策常常发生在捕获的同一秒内。这里显式拆出数字后缀：
+    没有后缀视为 1，``-2`` 视为 2——读到的顺序与写入顺序一致。
+    """
+    stem = path.stem
+    base, separator, suffix = stem.rpartition("-")
+    if separator and suffix.isdigit():
+        return (base, int(suffix))
+    return (stem, 1)
 
 
 def _read_text(path: Path) -> str:
