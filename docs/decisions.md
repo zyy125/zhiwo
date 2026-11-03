@@ -540,3 +540,91 @@ for something the contract already places elsewhere.
 extract and injects `estimate_reader_tokens` into `merge_dossier`; M8 uses
 `render_reader_view`, `search_journal` and `provenance` for export/ask/why.
 No `SPEC.md` or `profile.yaml` semantics changed.
+
+## D-010 — M7 CLI: capture dispatch, journal-first degradation, and read-only attention reports
+
+**Date:** 2026-11-03 · **Status:** accepted
+
+**Context.** M7 lands `pipeline.py` (the plan §5 orchestration) and `cli.py`
+(the L6 shell for `init`, capture, `show`, `why`, `diff`). M8 still owns
+`review` / `export` / `ask`, and M9 owns the real OpenAI-compatible provider
+and the provider-from-environment matrix. Several interaction choices were
+not fixed by the plan: how an unknown first argument becomes a capture,
+what happens when no provider is configured, whether `show --conflicts`
+may write, and what `me diff` means before the first commit.
+
+**Decision.**
+
+1. **`pipeline.py` owns the order; `cli.py` only parses and renders.**
+   Capture acquires the writer lock itself and runs journal append →
+   reconcile → post-reconcile core view → extract → merge with
+   `estimate_reader_tokens` injected as the budget hook. The core view is
+   rendered from the reconcile scan, not from a fresh `load_documents`: a
+   hand-written line adopted in this same merge must already be visible to
+   extract (plan §5 step 4→5). It is the same renderer over the
+   post-adoption documents that D-009's shorthand called for. The CLI never
+   sequences disk writes, so the future MCP server reuses the same functions
+   instead of growing a second order that can drift.
+2. **Unknown first positional arguments are capture text.** The click group
+   overrides `resolve_command` (the extension point named in plan §2): a
+   first token that is neither an option nor a known command is handed to a
+   hidden `capture` command, and multiple shell words are joined into one
+   statement. The three M8 command names (`review`, `export`, `ask`) are
+   reserved: until they exist, `me review` fails loudly instead of writing
+   the word "review" into the journal. This is the one deliberate hardcoded
+   command list in the CLI, and it lapses when M8 registers those commands.
+3. **Capture degrades journal-first, never silently.** A `ProviderError`
+   becomes an empty draft list plus a printed diagnostic; the journal append,
+   changelog entry, and commit still happen (D-008, iron rule #2). Malformed
+   model output is likewise data (`ExtractResult.error`), not a rollback.
+   With no provider configured, the merge records `extractor: none` and the
+   CLI says the capture was committed without extraction. The only M7
+   provider is the offline `--replay FILE` path, used by tests and the manual
+   smoke; M9 replaces the no-provider default with the live client. The
+   changelog always tells the truth about whether a model took part.
+4. **Multi-line capture is split into journal lines.** Blank paragraphs are
+   dropped; each remaining line is one capture, matching the store's append
+   unit. Evidence matching and `#L<n>` pointers still use the absolute range
+   returned by the durable journal, so a caller-supplied line count can never
+   shift the coordinates.
+5. **`show --conflicts` is a read-only reconcile preview.** It calls the same
+   `reconcile_dossier` scan a merge would, but writes nothing: no adoption,
+   no section stubs, no changelog. Conflicts, quarantined lines, and R9
+   warnings are rendered; candidate ids assigned in the in-memory scan are
+   only labels for the report. This makes the preview honest without creating
+   a second conflict detector whose findings could disagree with the merge.
+6. **`show` selects by shape.** An `f_` prefix is a fact id; anything else is
+   a section id (plan §1). The single-fact view prints the §2.1 logical record;
+   lists group records by declared path. JSON output is UTF-8 without ASCII
+   escaping (plan §4).
+7. **`why` reports facts without history as such.** The command prints every
+   changelog event touching the id, including rejected/skipped records and
+   source-line context. A file fact that predates the changelog is shown with
+   "no changelog events" rather than being treated as an error or having a
+   provenance invented for it (D-009).
+8. **`diff` is a thin git read, with one deliberate fallback.** With HEAD it
+   passes arguments through to `git diff`. Before the first commit it prints
+   the missing-HEAD notice plus `git status --short`, because `git diff`
+   never shows untracked files and `me init` leaves the whole dossier
+   untracked. There is no fake empty diff claiming the tree is clean.
+9. **`init` uses the same discovery order as every other command**
+   (`--dossier` > `ME_HOME` > `~/.me`) but treats the target as a path to
+   create, not one that must already exist. It creates no initial commit
+   (D-005): the first merge owns that commit.
+
+**Why.** The recurring question is who owns a moment of interaction. The
+pipeline owns order, the merge owns writes, the journal owns durability, the
+provider owns only text, and the CLI owns wording. Letting a missing provider
+block capture, letting `show` persist a scan, or letting an unknown word be
+guessed as something other than capture would each break an iron rule in the
+name of convenience. The reserved-command list is the one concession to the
+M7/M8 split: it is temporary scaffolding, recorded here so it cannot be
+forgotten.
+
+**Consequences.** M8 should register `review`, `export`, and `ask` and reuse
+`pipeline`'s capture/view functions plus merge's write tail; the reserved
+list then becomes inert. M9 should replace the no-provider default with the
+environment-driven OpenAI-compatible provider while keeping replay as the
+offline test path. `show --conflicts` is a preview, not a reconcile run: a
+user who wants adoption must perform a merge (M8's review or the next
+capture). The contract (`SPEC.md`) and `profile.yaml` are unchanged.
