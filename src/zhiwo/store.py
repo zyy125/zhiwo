@@ -548,6 +548,43 @@ class Dossier:
 
     # --- git ------------------------------------------------------------
 
+    def has_git_repository(self) -> bool:
+        """档案是否已经是一个 git 仓库（``me diff`` 的前置条件）。
+
+        用 ``rev-parse --git-dir`` 而不是判断 ``.git/`` 是否存在：worktree、
+        submodule 与 ``GIT_DIR`` 覆盖都会让目录检查误报。失败不抛异常——
+        "不是仓库"是一个正常答案，由 CLI 决定怎么提示（plan §5 的
+        ``me diff`` 没有 HEAD 的提示是 M7 的职责）。
+        """
+        return _git_run(self.root, "rev-parse", "--git-dir").returncode == 0
+
+    def has_head(self) -> bool:
+        """仓库里是否已经有提交（``me init`` 后、首次 merge 前为 False）。
+
+        ``--verify --quiet`` 在无 HEAD 时只返回非零、不打印错误；用它而不是
+        解析 ``log`` 的失败文本，避免把"不是一个仓库"与"还没有提交"混成
+        同一种状态。调用方应先用 :meth:`has_git_repository` 区分两者。
+        """
+        return _git_run(self.root, "rev-parse", "--verify", "--quiet", "HEAD").returncode == 0
+
+    def git_diff(self, args: Sequence[str] = ()) -> str:
+        """把 ``git diff`` 的原始输出交给调用方（``me diff`` 的读原语）。
+
+        ``args`` 直接透传：``me diff --stat``、``me diff HEAD~1`` 都是用户
+        对 git 的明确请求，store 不替它筛选。单独的 ``diff`` 命令不会改动
+        工作区，因此不需要写锁；只在 ``ME`` 命令的渲染层使用。
+
+        非零退出照旧转成 :class:`~zhiwo.errors.GitError`（例如非法的
+        revision 参数）。``--exit-code`` 会让"有差异"也返回 1，那种情况下
+        用户拿到的是一条带 stderr 的 GitError，而不是 diff 文本——MVP
+        接受这个边角，避免为透传参数再引入一层退出码协议。
+        """
+        return _git(self.root, "diff", *args).stdout
+
+    def git_status_short(self) -> str:
+        """``git status --short`` 的原样输出（无 HEAD 时 ``me diff`` 用）。"""
+        return _git(self.root, "status", "--short").stdout
+
     def git_commit(self, message: str) -> str:
         """把工作区全部改动提交为一个提交，返回短 sha（plan §5 步骤 11）。
 
@@ -712,14 +749,30 @@ def _fsync_directory(directory: Path) -> None:
         os.close(fd)
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """跑一条 git 子进程命令；非零退出抛 ``GitError``（带 stderr）。
+def default_dossier_root() -> Path:
+    """``me init`` 在没有显式目标时的落点（plan §3 决策 2 的发现链）。
 
-    统一在这里做三件事：``-C`` 指定档案目录（不依赖进程 cwd）、
-    捕获输出、把 stderr 原文带进异常——"为什么没提交上"的答案几乎总在
-    那里面（缺 committer identity、文件被锁、hook 失败）。
+    与 :meth:`Dossier.discover` 的顺序一致（``ME_HOME`` > ``~/.me/``），
+    但**不检查存在性**：init 的任务正是创建它。``--dossier`` 是更上面
+    一层的事，由 CLI 先解析——那属于"调用方明确指了哪里"，不是默认值。
+
+    ``Path.home()`` 与 ``ME_HOME`` 都在调用时求值，理由同
+    :meth:`Dossier.discover`：测试用 ``monkeypatch`` 换家目录时才有效。
     """
-    result = subprocess.run(
+    env_home = os.environ.get(ME_HOME_ENV, "").strip()
+    if env_home:
+        return Path(env_home).expanduser()
+    return Path.home() / DIR_NAME
+
+
+def _git_run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """跑一条 git 子进程命令，**不判定退出码**。
+
+    给"存在性提问"（是不是仓库、有没有 HEAD）用：那些问题的答案是
+    returncode，而不是异常。``-C`` 固定档案目录、``encoding="utf-8"``
+    固定解码，与 :func:`_git` 的唯一差别是不 raise。
+    """
+    return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
         text=True,
@@ -727,6 +780,16 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         errors="replace",
         check=False,
     )
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """跑一条 git 子进程命令；非零退出抛 ``GitError``（带 stderr）。
+
+    统一在这里做三件事：``-C`` 指定档案目录（不依赖进程 cwd）、
+    捕获输出、把 stderr 原文带进异常——"为什么没提交上"的答案几乎总在
+    那里面（缺 committer identity、文件被锁、hook 失败）。
+    """
+    result = _git_run(root, *args)
     if result.returncode != 0:
         # git 的"为什么失败"并不总在 stderr：``commit`` 在无事可做时把
         # "nothing to commit" 写在 **stdout** 上。两手都要，取有的那个——
