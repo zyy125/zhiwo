@@ -91,6 +91,23 @@ def test_merge_api_is_re_exported() -> None:
         assert getattr(zhiwo, name) is not None, name
 
 
+def test_extract_and_provider_api_is_re_exported() -> None:
+    """M5 的 L2 面：CLI/pipeline 从顶层取 extract 与 provider 替身。"""
+    for name in (
+        "ExtractResult",
+        "MockProvider",
+        "ParsedResponse",
+        "Provider",
+        "RecordProvider",
+        "ReplayProvider",
+        "build_extract_prompt",
+        "extract",
+        "parse_extract_response",
+    ):
+        assert name in zhiwo.__all__, name
+        assert getattr(zhiwo, name) is not None, name
+
+
 def test_the_whole_error_vocabulary_is_re_exported() -> None:
     """异常是层与层之间的 API（errors.py 的模块 docstring）：一个都不能漏。"""
     for name in ("ZhiwoError", "SchemaError", "MergeRefused", "LockHeld", "ProviderError"):
