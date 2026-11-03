@@ -192,3 +192,92 @@ def test_read_journal_entries_missing_file_is_a_schema_error(dossier: Dossier) -
     """文件不存在属于"读不出来"，与 L1/L0 的其他读取失败同一姿态。"""
     with pytest.raises(SchemaError):
         dossier.read_journal_entries("journal/1999-01-01.md", first_line=1, last_line=1)
+
+
+# --- 全量捕获扫描（M6 检索）---------------------------------------------
+
+
+def test_journal_entries_skip_headings_and_comments_but_keep_line_numbers(
+    dossier: Dossier,
+) -> None:
+    """标题/空行/HTML 注释不是捕获；它们仍占行号，指针不能重编号。"""
+    entries = dossier.journal_entries()
+
+    assert [(entry.path, entry.line_no, entry.text) for entry in entries] == [
+        ("journal/2026-10-11.md", 6, "昨晚只睡了六个小时，下午有个面试。"),
+        ("journal/2026-10-11.md", 7, "面试挂了，二面，反馈说项目深度不够。"),
+        ("journal/2026-10-11.md", 8, "和家里通电话，聊到毕业后回不回老家。"),
+    ]
+
+
+def test_journal_entries_keep_a_hand_edited_line_without_a_bullet(dossier: Dossier) -> None:
+    """手改掉 ``- `` 前缀的行仍是一条捕获：检索不该比证据校验更严格。"""
+    path = dossier.journal_dir() / "2026-10-11.md"
+    path.write_text(path.read_text(encoding="utf-8") + "没有项目符号的一行\n", encoding="utf-8")
+
+    last = dossier.journal_entries()[-1]
+
+    assert (last.line_no, last.text) == (9, "没有项目符号的一行")
+
+
+def test_journal_entries_skip_a_multi_line_html_comment(dossier: Dossier) -> None:
+    """跨行注释里的文字不能被当成捕获——否则搜索会命中说明文档。"""
+    path = dossier.journal_dir() / "2026-10-11.md"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "<!-- 注释开始\n注释中间的捕获假象\n-->\n真实一行\n",
+        encoding="utf-8",
+    )
+
+    entries = dossier.journal_entries()
+
+    assert [entry.text for entry in entries][-1] == "真实一行"
+    assert all("注释中间" not in entry.text for entry in entries)
+
+
+# --- 任意文件的 ±1 行上下文（M6 provenance）------------------------------
+
+
+def test_read_line_context_returns_the_source_line_plus_neighbors(dossier: Dossier) -> None:
+    """journal 与事实文件共用同一坐标；上下文保留原始行（含项目符号）。"""
+    assert dossier.read_line_context("journal/2026-10-11.md", 7) == (
+        (6, "- 昨晚只睡了六个小时，下午有个面试。"),
+        (7, "- 面试挂了，二面，反馈说项目深度不够。"),
+        (8, "- 和家里通电话，聊到毕业后回不回老家。"),
+    )
+    assert dossier.read_line_context("about/values.md", 9) == (
+        (8, "- 独处充电，不喜欢频繁社交 <!-- f_002 -->"),
+        (9, "- 遇到大决定习惯列出所有选项再逐个排除 <!-- f_003 locked -->"),
+        (10, "- ~~想读博~~ <!-- f_009 superseded-by:f_017 -->"),
+    )
+
+
+def test_read_line_context_clips_at_file_boundaries(dossier: Dossier) -> None:
+    assert dossier.read_line_context("journal/2026-10-11.md", 1, radius=1) == (
+        (1, "# 2026-10-11"),
+        (2, ""),
+    )
+    assert dossier.read_line_context("journal/2026-10-11.md", 8, radius=1) == (
+        (7, "- 面试挂了，二面，反馈说项目深度不够。"),
+        (8, "- 和家里通电话，聊到毕业后回不回老家。"),
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "../about/career.md",
+        "./journal/2026-10-11.md",
+        "journal\\2026-10-11.md",
+        "/etc/passwd",
+    ],
+)
+def test_read_line_context_rejects_paths_outside_the_dossier(
+    dossier: Dossier, relative_path: str
+) -> None:
+    with pytest.raises(ZhiwoError):
+        dossier.read_line_context(relative_path, 1)
+
+
+def test_read_line_context_rejects_an_out_of_bounds_line(dossier: Dossier) -> None:
+    with pytest.raises(ZhiwoError, match="out of bounds"):
+        dossier.read_line_context("journal/2026-10-11.md", 99)

@@ -2,7 +2,6 @@ about/values.md
 - f_001 [active] 厌恶风险，偏好确定性
 - f_002 [active] 独处充电，不喜欢频繁社交
 - f_003 [active, locked] 遇到大决定习惯列出所有选项再逐个排除
-- f_009 [superseded] 想读博
 - f_017 [active] 决定直接工作，不读博 (supersedes f_009)
 
 about/career.md
