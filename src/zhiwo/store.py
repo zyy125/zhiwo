@@ -72,6 +72,25 @@ class JournalAppend:
     last_line: int
 
 
+@dataclass(frozen=True, slots=True)
+class JournalEntry:
+    """journal 里的一条捕获（M6 检索用的全量扫描单位）。
+
+    ``path`` 是**相对档案根目录的 POSIX 路径**（如
+    ``journal/2026-10-11.md``），与 changelog 的 ``source`` 指针同一写法；
+    ``line_no`` 是 1-based 绝对行号，不是“第几条捕获”。标题、空行与
+    HTML 注释会被跳过，但它们在文件里仍占行号——证据校验与 ``#L<n>``
+    依赖的就是盘上的真实坐标（SPEC §2.4：journal 只追加，指针不漂移）。
+
+    ``text`` 已去掉 store 写入时的 ``- `` 前缀；手改掉前缀的行原样返回，
+    与 :meth:`Dossier.read_journal_entries` 的证据语义一致。
+    """
+
+    path: str
+    line_no: int
+    text: str
+
+
 class Dossier:
     """一个档案目录（默认 ``~/.me/``）及其上的全部文件操作。
 
@@ -245,6 +264,51 @@ class Dossier:
             first_line=first_line,
             last_line=first_line + len(lines) - 1,
         )
+
+    def journal_entries(self) -> tuple[JournalEntry, ...]:
+        """全量读取 journal 捕获行，按文件名（= 时间序）与行号排序。
+
+        M6 的关键词检索需要“整条时间流”，但 journal 文件同时包含人写的
+        标题和说明性 HTML 注释。把这些行也当捕获会制造两类噪音：
+        查询命中注释里的说明文字，以及 ``source`` 指向一条并不存在的事实
+        证据。因此这里只跳过**表层文档行**：
+
+        - 空行；
+        - Markdown 标题（``#`` 开头）；
+        - HTML 注释（``<!-- … -->``，含跨行状态）。
+
+        没有 ``- `` 前缀的正文行仍然保留：人可能手改掉项目符号，证据
+        语义是“这段文字在不在这一行里”，检索没有理由比证据更严格。
+        行号始终按盘上原始行数计算，跳过的行不重编号——``#L<n>`` 不能漂。
+        """
+        directory = self.journal_dir()
+        if not directory.is_dir():
+            return ()
+
+        entries: list[JournalEntry] = []
+        for path in sorted(directory.glob("*.md")):
+            relative = path.relative_to(self.root).as_posix()
+            in_comment = False
+            for line_no, raw in enumerate(_read_text(path).splitlines(), start=1):
+                stripped = raw.strip()
+                if in_comment:
+                    if "-->" in stripped:
+                        in_comment = False
+                    continue
+                if stripped.startswith("<!--"):
+                    if "-->" not in stripped:
+                        in_comment = True
+                    continue
+                if not stripped or stripped.startswith("#"):
+                    continue
+                entries.append(
+                    JournalEntry(
+                        path=relative,
+                        line_no=line_no,
+                        text=_journal_entry_text(raw),
+                    )
+                )
+        return tuple(entries)
 
     def read_journal_entries(
         self, relative_path: str, *, first_line: int, last_line: int

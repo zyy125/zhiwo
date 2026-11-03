@@ -26,9 +26,11 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from zhiwo.errors import ZhiwoError
 from zhiwo.factfile import FactDocument
 from zhiwo.models import (
     Axis,
@@ -252,6 +254,66 @@ def estimate_reader_tokens(documents: Sequence[tuple[Section, FactDocument]]) ->
     return estimate_tokens(render_reader_view(documents, clearance=Clearance.HIGH))
 
 
+# --- journal 检索（SPEC §5 / 决议 4）---------------------------------------
+
+
+def search_journal(
+    dossier: Dossier,
+    query: str,
+    *,
+    clearance: Clearance,
+    top_n: int = _DEFAULT_TOP_N,
+) -> tuple[JournalHit, ...]:
+    """在 journal 捕获行里做关键词检索，返回得分最高的 ``top_n`` 条。
+
+    这是 SPEC §5 的 **high-clearance 能力**：journal 是原始话语流，里面
+    躺着高敏感事实的 evidence 原文。normal 读者拿到空元组，而不是
+    “过滤后的命中”——journal 的过滤粒度是“有没有 high clearance”，
+    不是逐分区裁剪。
+
+    检索是 resolved decision #4 的 keyword-first：
+
+    - 查询与每行都按 :func:`_tokenize` 切 token（P*/Z* 分隔 + CJK bigram）；
+    - 得分 = 查询 token 与行 token 的**去重交集大小**——重复出现不刷分，
+      避免一条复读的行压过真正覆盖多个查询词的行；
+    - 同分按“最新优先”排序（文件路径降序、行号降序），因为问当前状态
+      时最近的记录通常更有用；
+    - ``top_n`` 必须是正数；0 或负数不是“返回空”，而是调用方 bug。
+
+    空查询（或只有标点的查询）返回空元组，不做“全量返回”。
+    """
+    if top_n < 1:
+        raise ZhiwoError(f"top_n must be a positive integer, got {top_n}")
+
+    profile = dossier.load_profile()
+    journal = next((section for section in profile.sections if section.axis is Axis.JOURNAL), None)
+    if journal is None or not can_read(clearance, journal):
+        return ()
+
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return ()
+
+    hits: list[JournalHit] = []
+    for entry in dossier.journal_entries():
+        score = len(query_tokens & _tokenize(entry.text))
+        if score:
+            hits.append(
+                JournalHit(
+                    path=entry.path,
+                    line_no=entry.line_no,
+                    text=entry.text,
+                    score=score,
+                )
+            )
+
+    # 两次稳定排序：先建立“最新优先”的底序，再按得分降序。Python 的
+    # 稳定排序会把同分行保持在新→旧的顺序里，不需要手写复合 key。
+    hits.sort(key=lambda hit: (hit.path, hit.line_no), reverse=True)
+    hits.sort(key=lambda hit: hit.score, reverse=True)
+    return tuple(hits[:top_n])
+
+
 # --- 内部工具：共享的视图/检索基础 ------------------------------------------
 
 
@@ -271,6 +333,59 @@ def _load_documents(
         if document is not None:
             documents.append((section, document))
     return tuple(documents)
+
+
+def _tokenize(text: str) -> frozenset[str]:
+    """按 resolved decision #4 切检索 token。
+
+    规则：
+
+    - 以 Unicode **P***（标点）与 **Z***（分隔符）为断点；控制字符
+      也算断点，避免换行/零宽字符把两个词黏成一个 token。
+    - 大小写折叠（``casefold``）让英文查询不区分大小写。
+    - 每个断点之间的一段是一个 token；其中**连续 CJK 段**额外生成
+      bigram，且只在段内生成——``面试挂了，二面`` 不会产出跨标点的
+      ``了二``，那正是“只在连续 CJK 段内”要防的假阳性。
+    - 单字 CJK 段没有 bigram，但整段 token 就是那个字，仍可命中。
+
+    返回 ``frozenset``：检索只关心“哪些 token 出现”，重复不改变得分。
+    """
+    tokens: set[str] = set()
+    run: list[str] = []
+    for char in text.casefold():
+        if _is_token_separator(char):
+            _flush_token_run(run, tokens)
+            run.clear()
+        else:
+            run.append(char)
+    _flush_token_run(run, tokens)
+    return frozenset(tokens)
+
+
+def _flush_token_run(run: list[str], tokens: set[str]) -> None:
+    """把一段非分隔符文本写成 token，并为其中的连续 CJK 段补 bigram。"""
+    if not run:
+        return
+    word = "".join(run)
+    tokens.add(word)
+
+    index = 0
+    while index < len(word):
+        if not _is_cjk(word[index]):
+            index += 1
+            continue
+        end = index
+        while end < len(word) and _is_cjk(word[end]):
+            end += 1
+        for offset in range(index, end - 1):
+            tokens.add(word[offset : offset + 2])
+        index = end
+
+
+def _is_token_separator(char: str) -> bool:
+    """P*/Z* 为断点；Cc/Cf 等控制字符同样是断点（防御脏输入）。"""
+    category = unicodedata.category(char)
+    return category[0] in {"P", "Z", "C"} or char.isspace()
 
 
 def _is_cjk(char: str) -> bool:
