@@ -31,14 +31,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from zhiwo.errors import ZhiwoError
-from zhiwo.factfile import FactDocument
+from zhiwo.factfile import FactDocument, FactLine
 from zhiwo.models import (
     Axis,
+    ChangelogEntry,
     ChangelogPatch,
     Clearance,
     FactKind,
     FactStatus,
     PatchOp,
+    PatchResult,
     Profile,
     Section,
 )
@@ -146,6 +148,14 @@ class ProvenanceEvent:
     patch: ChangelogPatch
     context: tuple[SourceLine, ...] = ()
     context_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _FileFact:
+    """文件里的一条事实及其分区/行对象（join 的输入侧）。"""
+
+    section: Section
+    line: FactLine
 
 
 # --- 纯核心：视图与预算 -----------------------------------------------------
@@ -314,6 +324,139 @@ def search_journal(
     return tuple(hits[:top_n])
 
 
+# --- 逻辑记录与溯源（SPEC §2.1 / §2.4）------------------------------------
+
+
+def logical_records(dossier: Dossier) -> tuple[FactRecord, ...]:
+    """把文件事实与 changelog 事件 join 成 SPEC §2.1 的逻辑记录。
+
+    权威划分严格按契约：
+
+    - 文件 → ``text / status / locked / supersedes / superseded_by``
+      与 ``section / path / line_no``；文件里没有的事实不会被凭空造出来。
+    - changelog（仅 applied 事件）→ ``kind`` 取自创建事件，``source``
+      取自创建事件，``created`` 取最早触及该 id 的事件日期，``updated``
+      取最晚一次 applied 事件的日期。rejected / skipped 只是审计，
+      不改变事实状态，因此不参与 created/updated。
+    - ``archived`` 只在“创建过 + 有 applied retire + 文件里已不存在”时
+      出现（D-006：tombstone 就是 changelog 记录）。文本回落到创建事件，
+      因为那时文件里的唯一副本已经被人删掉了。
+
+    没有 changelog 的既有事实（黄金示例里大量存在）在 kind/source/时间上
+    是 ``None``。这是诚实的未知：拿 pending 标记倒推 inference、拿文件
+    mtime 猜创建时间，都会制造第二个权威。
+
+    重复 id 不静默取最后一个（SPEC §4）：直接抛 :class:`ZhiwoError` 并
+    列出两处 ``path:L<n>``。这虽然通常先被 reconcile 拦住，但 ``me show``
+    可能在任何一次 merge 之前被调用。
+    """
+    profile = dossier.load_profile()
+    documents = _load_documents(dossier, profile)
+    located = _index_facts(documents)
+
+    creation: dict[str, ChangelogPatch] = {}
+    created: dict[str, str | None] = {}
+    updated: dict[str, str | None] = {}
+    retired: set[str] = set()
+
+    for entry in dossier.read_changelog():
+        date = _entry_date(entry)
+        for patch in entry.patches:
+            if patch.result is not PatchResult.APPLIED:
+                continue
+            if patch.op is PatchOp.RETIRE and patch.id is not None:
+                retired.add(patch.id)
+            if patch.op in _CREATION_OPS and patch.id is not None:
+                creation.setdefault(patch.id, patch)
+                created.setdefault(patch.id, date)
+            if date is not None:
+                for fact_id in _patch_ids(patch):
+                    updated[fact_id] = date
+
+    records: list[FactRecord] = []
+    for fact_id, located_fact in located.items():
+        marker = located_fact.line.marker
+        assert marker is not None  # _index_facts 只收 FACT 行
+        assert located_fact.line.text is not None
+        creation_patch = creation.get(fact_id)
+        records.append(
+            FactRecord(
+                id=fact_id,
+                text=located_fact.line.text,
+                kind=creation_patch.kind if creation_patch is not None else None,
+                status=marker.status,
+                locked=marker.locked,
+                supersedes=marker.supersedes,
+                superseded_by=marker.superseded_by,
+                created=created.get(fact_id),
+                updated=updated.get(fact_id),
+                source=creation_patch.source if creation_patch is not None else None,
+                section_id=located_fact.section.id,
+                path=located_fact.section.path,
+                line_no=located_fact.line.line_no,
+            )
+        )
+
+    sections_by_path = {section.path: section for section in profile.sections}
+    for fact_id in sorted(fact_id for fact_id in creation if fact_id not in located):
+        if fact_id not in retired:
+            continue
+        creation_patch = creation[fact_id]
+        assert creation_patch.text is not None  # applied 创建事件必有 text（SPEC §3）
+        target = creation_patch.target
+        section = sections_by_path.get(target) if target is not None else None
+        records.append(
+            FactRecord(
+                id=fact_id,
+                text=creation_patch.text,
+                kind=creation_patch.kind,
+                status=FactStatus.ARCHIVED,
+                locked=False,
+                supersedes=None,
+                superseded_by=None,
+                created=created.get(fact_id),
+                updated=updated.get(fact_id),
+                source=creation_patch.source,
+                section_id=section.id if section is not None else None,
+                path=target,
+                line_no=None,
+            )
+        )
+    return tuple(records)
+
+
+def provenance(dossier: Dossier, fact_id: str) -> tuple[ProvenanceEvent, ...]:
+    """返回所有**触及**该 id 的 changelog 事件，按时间序（SPEC §2.4）。
+
+    “触及”包括所有身份字段：``id``（创建/退休）、``target_id``（被取代）、
+    ``from`` / ``to``（链接两端）、``members``（未来的 compress）。只看
+    正文里的 ``[[f_x]]`` 提及不算——那是文本内容，不是事件主体，否则
+    一条链接会被误当成很多条事实的溯源。
+
+    rejected / skipped 记录也返回：它们是“边界拦截过什么”的审计，
+    但不会影响 :func:`logical_records` 的状态/时间。每条事件的 source
+    都会读成 ±1 行上下文；source 坏了只填 ``context_error``，不影响
+    evidence 与事件本身。
+    """
+    events: list[ProvenanceEvent] = []
+    for entry in dossier.read_changelog():
+        for patch in entry.patches:
+            if fact_id not in _patch_ids(patch):
+                continue
+            context, context_error = _source_context(dossier, patch.source)
+            events.append(
+                ProvenanceEvent(
+                    merge=entry.merge,
+                    input=entry.input,
+                    extractor=entry.extractor,
+                    patch=patch,
+                    context=context,
+                    context_error=context_error,
+                )
+            )
+    return tuple(events)
+
+
 # --- 内部工具：共享的视图/检索基础 ------------------------------------------
 
 
@@ -392,3 +535,66 @@ def _is_cjk(char: str) -> bool:
     """字符是否属于 CJK 统一表意文字（预算与 bigram 共用同一判定）。"""
     code = ord(char)
     return any(start <= code <= end for start, end in _CJK_RANGES)
+
+
+def _index_facts(
+    documents: Sequence[tuple[Section, FactDocument]],
+) -> dict[str, _FileFact]:
+    """建立 id → 文件事实索引；重复 id 响亮失败（SPEC §4）。
+
+    ``dict`` 保持插入顺序，而插入按文档顺序、行顺序进行，因此
+    :func:`logical_records` 可以直接用它产生确定的记录顺序。
+    """
+    facts: dict[str, _FileFact] = {}
+    for section, document in documents:
+        for line in document.facts():
+            marker = line.marker
+            assert marker is not None  # facts() 的不变量
+            previous = facts.get(marker.fact_id)
+            if previous is not None:
+                raise ZhiwoError(
+                    "duplicate fact id "
+                    f"{marker.fact_id} at {previous.section.path}:L{previous.line.line_no} "
+                    f"and {section.path}:L{line.line_no} (SPEC §4: never pick one silently)"
+                )
+            facts[marker.fact_id] = _FileFact(section=section, line=line)
+    return facts
+
+
+def _patch_ids(patch: ChangelogPatch) -> set[str]:
+    """一条 changelog 记录触及的全部事实 id（身份、关系、成员）。"""
+    ids = {
+        fact_id
+        for fact_id in (patch.id, patch.target_id, patch.from_fact, patch.to)
+        if fact_id is not None
+    }
+    if patch.members:
+        ids.update(patch.members)
+    return ids
+
+
+def _entry_date(entry: ChangelogEntry) -> str | None:
+    """从 merge id 里取 ISO 日期（SPEC §2.1 的 created/updated 只到天）。
+
+    写入方保证 merge id 是 ``YYYY-MM-DDThhmmss`` 形式的文件名 stem；黄金
+    示例保留了 ``m_`` 前缀（R5：读取器比写入者宽容）。两者都含日期，
+    匹配不到时返回 ``None``，不要拿文件 mtime 猜。
+    """
+    match = _ISO_DATE_RE.search(entry.merge)
+    return match.group(0) if match is not None else None
+
+
+def _source_context(
+    dossier: Dossier, source: str | None
+) -> tuple[tuple[SourceLine, ...], str | None]:
+    """把 source 指针读成 ±1 行上下文；失败作为数据返回。"""
+    if source is None:
+        return (), None
+    match = _SOURCE_RE.match(source)
+    if match is None:
+        return (), f"malformed source pointer: {source!r}"
+    try:
+        lines = dossier.read_line_context(match.group("path"), int(match.group("line")))
+    except ZhiwoError as exc:
+        return (), str(exc)
+    return tuple(SourceLine(line_no=number, text=text) for number, text in lines), None

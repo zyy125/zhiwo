@@ -232,3 +232,52 @@ def test_journal_entries_skip_a_multi_line_html_comment(dossier: Dossier) -> Non
 
     assert [entry.text for entry in entries][-1] == "真实一行"
     assert all("注释中间" not in entry.text for entry in entries)
+
+
+# --- 任意文件的 ±1 行上下文（M6 provenance）------------------------------
+
+
+def test_read_line_context_returns_the_source_line_plus_neighbors(dossier: Dossier) -> None:
+    """journal 与事实文件共用同一坐标；上下文保留原始行（含项目符号）。"""
+    assert dossier.read_line_context("journal/2026-10-11.md", 7) == (
+        (6, "- 昨晚只睡了六个小时，下午有个面试。"),
+        (7, "- 面试挂了，二面，反馈说项目深度不够。"),
+        (8, "- 和家里通电话，聊到毕业后回不回老家。"),
+    )
+    assert dossier.read_line_context("about/values.md", 9) == (
+        (8, "- 独处充电，不喜欢频繁社交 <!-- f_002 -->"),
+        (9, "- 遇到大决定习惯列出所有选项再逐个排除 <!-- f_003 locked -->"),
+        (10, "- ~~想读博~~ <!-- f_009 superseded-by:f_017 -->"),
+    )
+
+
+def test_read_line_context_clips_at_file_boundaries(dossier: Dossier) -> None:
+    assert dossier.read_line_context("journal/2026-10-11.md", 1, radius=1) == (
+        (1, "# 2026-10-11"),
+        (2, ""),
+    )
+    assert dossier.read_line_context("journal/2026-10-11.md", 8, radius=1) == (
+        (7, "- 面试挂了，二面，反馈说项目深度不够。"),
+        (8, "- 和家里通电话，聊到毕业后回不回老家。"),
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "../about/career.md",
+        "./journal/2026-10-11.md",
+        "journal\\2026-10-11.md",
+        "/etc/passwd",
+    ],
+)
+def test_read_line_context_rejects_paths_outside_the_dossier(
+    dossier: Dossier, relative_path: str
+) -> None:
+    with pytest.raises(ZhiwoError):
+        dossier.read_line_context(relative_path, 1)
+
+
+def test_read_line_context_rejects_an_out_of_bounds_line(dossier: Dossier) -> None:
+    with pytest.raises(ZhiwoError, match="out of bounds"):
+        dossier.read_line_context("journal/2026-10-11.md", 99)

@@ -375,6 +375,57 @@ class Dossier:
             )
         return tuple(_journal_entry_text(line) for line in lines[first_line - 1 : last_line])
 
+    def read_line_context(
+        self, relative_path: str, line_no: int, *, radius: int = 1
+    ) -> tuple[tuple[int, str], ...]:
+        """读档案内任意文件某一行的 ±``radius`` 行原文（M6 provenance 用）。
+
+        为什么不是 journal 专用：``adopt`` 的 source 指向**事实文件**里的
+        收编行（D-006），而 add / supersede 的 source 指向 journal。``me why``
+        要能对两种来源都给出上下文，所以入口必须接受档案内任意相对路径。
+
+        边界与 :meth:`read_journal_entries` 同一姿态：
+
+        - 路径必须是规范相对 POSIX 路径，解析后不得逃出档案根目录
+          （``..``、绝对路径、反斜杠、符号链接都算逃逸）；
+        - ``line_no`` 必须落在文件内；越界不是“返回空”，是调用方拿错了
+          指针，必须响亮失败；
+        - 返回原行（不剥 ``- ``、不 strip），因为这是给人看的上下文，
+          不是证据匹配的 haystack；``radius=0`` 返回该行本身；
+        - 读失败/非 UTF-8 归一为 ``SchemaError``，与 L0 其余读取一致。
+        """
+        if radius < 0:
+            raise ZhiwoError(f"context radius must be >= 0, got {radius}")
+        candidate = PurePosixPath(relative_path)
+        if (
+            candidate.is_absolute()
+            or not candidate.parts
+            or "\\" in relative_path
+            or any(part in {"", ".", ".."} for part in candidate.parts)
+            or candidate.as_posix() != relative_path
+        ):
+            raise ZhiwoError(
+                f"source path must be a canonical relative POSIX path inside the "
+                f"dossier: {relative_path!r}"
+            )
+
+        root = self.root.resolve()
+        path = (self.root / relative_path).resolve()
+        if not path.is_relative_to(root):
+            raise ZhiwoError(
+                f"source path escapes the dossier: {relative_path!r} (dossier is {root})"
+            )
+
+        lines = _read_text(path).splitlines()
+        if line_no < 1 or line_no > len(lines):
+            raise ZhiwoError(
+                f"source line L{line_no} is out of bounds: "
+                f"{relative_path} has {len(lines)} line(s)"
+            )
+        start = max(1, line_no - radius)
+        end = min(len(lines), line_no + radius)
+        return tuple((number, lines[number - 1]) for number in range(start, end + 1))
+
     # --- changelog ------------------------------------------------------
 
     def read_changelog(self) -> list[ChangelogEntry]:
