@@ -3,8 +3,10 @@
 本包的磁盘契约见仓库根目录 ``SPEC.md``；实现分层见 ``AGENTS.md``。
 已落地：L1（schema，M1）、L0（store + factfile，M2）、reconcile
 （SPEC §4 的五种观察 + id 空间，M3）、merge
-（SPEC §3 的唯一写路径：验证 / 分配 id / 应用 / changelog / 提交，M4）
-与 extract（L2：prompt + 模型响应解析 + provider 协议/录制回放，M5）。
+（SPEC §3 的唯一写路径：验证 / 分配 id / 应用 / changelog / 提交，M4）、
+extract（L2：prompt + 模型响应解析 + provider 协议/录制回放，M5）与
+recall（L4：core/reader 视图、token 估算、journal 检索、逻辑记录与
+provenance，M6）。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
@@ -73,6 +75,20 @@ from zhiwo.models import (
     Section,
     Sensitivity,
 )
+from zhiwo.recall import (
+    FactRecord,
+    JournalHit,
+    ProvenanceEvent,
+    SourceLine,
+    estimate_reader_tokens,
+    estimate_tokens,
+    load_documents,
+    logical_records,
+    provenance,
+    render_core_view,
+    render_reader_view,
+    search_journal,
+)
 from zhiwo.reconcile import (
     Adoption,
     Conflict,
@@ -97,6 +113,7 @@ from zhiwo.schema import (
 from zhiwo.store import (
     Dossier,
     JournalAppend,
+    JournalEntry,
     atomic_write,
     bootstrap_dossier,
     git_init,
@@ -127,9 +144,12 @@ __all__ = [
     "FactDocument",
     "FactKind",
     "FactLine",
+    "FactRecord",
     "FactStatus",
     "GitError",
     "JournalAppend",
+    "JournalEntry",
+    "JournalHit",
     "LineKind",
     "Location",
     "LockHeld",
@@ -146,6 +166,7 @@ __all__ = [
     "PatchOp",
     "PatchResult",
     "Profile",
+    "ProvenanceEvent",
     "Provider",
     "ProviderError",
     "QuarantineItem",
@@ -157,6 +178,7 @@ __all__ = [
     "SchemaError",
     "Section",
     "Sensitivity",
+    "SourceLine",
     "ZhiwoError",
     "__version__",
     "apply_patches",
@@ -165,9 +187,13 @@ __all__ = [
     "build_extract_prompt",
     "can_read",
     "check_fact_text",
+    "estimate_reader_tokens",
+    "estimate_tokens",
     "extract",
     "git_init",
+    "load_documents",
     "load_profile",
+    "logical_records",
     "mentioned_fact_ids",
     "mentions_fact_id",
     "merge_dossier",
@@ -177,9 +203,13 @@ __all__ = [
     "parse_marker",
     "parse_profile",
     "parse_yaml",
+    "provenance",
     "reconcile_documents",
     "reconcile_dossier",
+    "render_core_view",
     "render_fact_line",
     "render_marker",
+    "render_reader_view",
+    "search_journal",
     "template_text",
 ]

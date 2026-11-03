@@ -108,6 +108,27 @@ def test_extract_and_provider_api_is_re_exported() -> None:
         assert getattr(zhiwo, name) is not None, name
 
 
+def test_recall_api_is_re_exported() -> None:
+    """M6 的 L4 面：CLI / MCP server 从顶层取视图、检索、join 与溯源。"""
+    for name in (
+        "FactRecord",
+        "JournalEntry",
+        "JournalHit",
+        "ProvenanceEvent",
+        "SourceLine",
+        "estimate_reader_tokens",
+        "estimate_tokens",
+        "load_documents",
+        "logical_records",
+        "provenance",
+        "render_core_view",
+        "render_reader_view",
+        "search_journal",
+    ):
+        assert name in zhiwo.__all__, name
+        assert getattr(zhiwo, name) is not None, name
+
+
 def test_the_whole_error_vocabulary_is_re_exported() -> None:
     """异常是层与层之间的 API（errors.py 的模块 docstring）：一个都不能漏。"""
     for name in ("ZhiwoError", "SchemaError", "MergeRefused", "LockHeld", "ProviderError"):
