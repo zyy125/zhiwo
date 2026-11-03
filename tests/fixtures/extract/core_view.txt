@@ -1,0 +1,14 @@
+about/values.md
+- f_001 [active] 厌恶风险，偏好确定性
+- f_002 [active] 独处充电，不喜欢频繁社交
+- f_003 [active, locked] 遇到大决定习惯列出所有选项再逐个排除
+- f_009 [superseded] 想读博
+- f_017 [active] 决定直接工作，不读博 (supersedes f_009)
+
+about/career.md
+- f_051 [active] 二面反馈：项目深度不够（2026-10-11）
+
+goals/current.md
+- f_042 [active] 秋招进行中
+- f_044 [active] 目标岗位：后端
+- f_043 [pending] 根据二面反馈补项目深度（见 [[f_051]]）
