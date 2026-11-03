@@ -61,6 +61,12 @@ _SOURCE_RE = re.compile(r"^(?P<path>.+)#L(?P<line>[1-9][0-9]*)$")
 # changelog 会让旧代码把压缩事实当成“无来源”。
 _CREATION_OPS = frozenset({PatchOp.ADD, PatchOp.SUPERSEDE, PatchOp.ADOPT, PatchOp.COMPRESS})
 
+# 让事实进入 archived 的事件：SPEC §4 的 retire 与 M8 review 的 reject。
+# 两者都以 changelog 记录为墓碑（D-011）；读取器必须用同一口径判断
+# "文件里没有 + 历史里归档过"，否则被 review 拒绝的事实会看起来像
+# 一条凭空消失、无法解释的记录。
+_ARCHIVAL_OPS = frozenset({PatchOp.RETIRE, PatchOp.REJECT})
+
 # CJK 码位范围。用宽区间而不是逐个 Unicode 区块：未分配码位出现在
 # 事实文本里时，多算一个 token 比漏算安全（预算只是警告，SPEC §6 / D-002）。
 _CJK_RANGES: tuple[tuple[int, int], ...] = (
@@ -85,7 +91,8 @@ class FactRecord:
     “不知道”，不是可以拿文件状态倒推的猜测。
 
     ``status`` 取 :class:`~zhiwo.models.FactStatus`；``archived`` 只可能
-    来自一条 applied ``retire`` 事件（SPEC §2.1：文件里没有 archived 写法）。
+    来自一条 applied ``retire`` 或 M8 的 ``reject`` 事件（SPEC §2.1：文件里
+    没有 archived 写法；两类事件都以 changelog 为墓碑，D-011）。
     ``line_no`` 对 archived 事实为 ``None``（它已经不在文件里）。
     """
 
@@ -338,9 +345,9 @@ def logical_records(dossier: Dossier) -> tuple[FactRecord, ...]:
       取自创建事件，``created`` 取最早触及该 id 的事件日期，``updated``
       取最晚一次 applied 事件的日期。rejected / skipped 只是审计，
       不改变事实状态，因此不参与 created/updated。
-    - ``archived`` 只在“创建过 + 有 applied retire + 文件里已不存在”时
-      出现（D-006：tombstone 就是 changelog 记录）。文本回落到创建事件，
-      因为那时文件里的唯一副本已经被人删掉了。
+    - ``archived`` 只在“创建过 + 有 applied retire/reject + 文件里已不存在”
+      时出现（D-006：tombstone 就是 changelog 记录；M8 的 reject 同构，
+      D-011）。文本回落到创建事件，因为那时文件里的唯一副本已被移除。
 
     没有 changelog 的既有事实（黄金示例里大量存在）在 kind/source/时间上
     是 ``None``。这是诚实的未知：拿 pending 标记倒推 inference、拿文件
@@ -364,7 +371,7 @@ def logical_records(dossier: Dossier) -> tuple[FactRecord, ...]:
         for patch in entry.patches:
             if patch.result is not PatchResult.APPLIED:
                 continue
-            if patch.op is PatchOp.RETIRE and patch.id is not None:
+            if patch.op in _ARCHIVAL_OPS and patch.id is not None:
                 retired.add(patch.id)
             if patch.op in _CREATION_OPS and patch.id is not None:
                 creation.setdefault(patch.id, patch)

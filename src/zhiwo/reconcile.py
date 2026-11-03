@@ -454,7 +454,10 @@ def reconcile_dossier(dossier: Dossier) -> ReconcileScan:
             if patch.id is None:
                 continue
             changelog_ids.add(patch.id)
-            if patch.op is PatchOp.RETIRE:
+            # retire 与 M8 的 review reject 都以 changelog 记录为墓碑（D-011）。
+            # 两者都进 retired_ids，否则下一次 merge 会把同一条已归档事实
+            # 再退休一遍——changelog 只追加，重复记录毫无信息量。
+            if patch.op in (PatchOp.RETIRE, PatchOp.REJECT):
                 retired_ids.add(patch.id)
             elif patch.op in _CREATION_OPS and patch.result is PatchResult.APPLIED:
                 created_ids.add(patch.id)

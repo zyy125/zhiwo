@@ -433,6 +433,30 @@ def test_retire_patch_requires_reason() -> None:
         ChangelogPatch.model_validate({"op": "retire", "id": "f_051"})
 
 
+@pytest.mark.parametrize(
+    ("op", "payload"),
+    [
+        ("confirm", {"id": "f_043"}),
+        ("edit", {"id": "f_043", "text": "改写后的推断"}),
+        ("reject", {"id": "f_043", "reason": "review: rejected pending fact"}),
+    ],
+)
+def test_review_ops_are_readable(op: str, payload: dict[str, object]) -> None:
+    """M8 的人工决定是长期 changelog 词汇，读取器今天就得认识（D-011）。"""
+    patch = ChangelogPatch.model_validate({"op": op, **payload})
+    assert patch.op.value == op
+    assert patch.result is PatchResult.APPLIED
+
+
+def test_review_ops_keep_their_minimal_shapes() -> None:
+    """edit 需要新文本，reject 需要理由；confirm 只需要身份。"""
+    with pytest.raises(ValidationError, match="text"):
+        ChangelogPatch.model_validate({"op": "edit", "id": "f_043"})
+    with pytest.raises(ValidationError, match="reason"):
+        ChangelogPatch.model_validate({"op": "reject", "id": "f_043"})
+    ChangelogPatch.model_validate({"op": "confirm", "id": "f_043"})
+
+
 def test_writer_recipe_emits_contract_keys() -> None:
     """钉住给 M2 的写盘配方：``mode="json", by_alias=True``。
 

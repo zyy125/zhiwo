@@ -172,6 +172,10 @@ class PatchOp(enum.StrEnum):
       被手删）。它们由 M3 写入，这里同样先放进词汇表：理由与 compress
       一致——既然"读取器必须认识契约里的每个 op"，就没有理由只对
       §3 的 op 生效。必填字段见 _REQUIRED_BY_OP（M3，形态记在 D-006）。
+    - M8 的三种 review 决定：confirm / edit / reject。它们不是 extractor
+      产出的补丁，而是人对 pending 事实的裁决；changelog 是事件日志，
+      人工决定同样需要一个可长期阅读的词汇。reject 与 retire 一样让
+      事实进入 archived（墓碑就是 changelog 记录，D-011）。
     """
 
     ADD = "add"
@@ -180,6 +184,9 @@ class PatchOp(enum.StrEnum):
     COMPRESS = "compress"
     ADOPT = "adopt"  # SPEC §4：手写事实被收编，行本身即 evidence
     RETIRE = "retire"  # SPEC §4：事实被手删，状态转 archived
+    CONFIRM = "confirm"  # M8：pending 推断被确认（可能同时应用延迟 supersede）
+    EDIT = "edit"  # M8：pending 推断被改写并 locked
+    REJECT = "reject"  # M8：pending 推断被拒绝，行删除、状态 archived
 
 
 class FactKind(enum.StrEnum):
@@ -244,6 +251,15 @@ _REQUIRED_BY_OP: dict[PatchOp, tuple[str, ...]] = {
     # 已经生效，事实本来就不在文件里（SPEC §2.1：archived 只存在于
     # changelog，文件里没有它的写法——retire 补丁本身就是墓碑）。
     PatchOp.RETIRE: ("id", "reason"),
+    # M8 的 review 决定记录（D-011）。confirm 只需 id；若应用了延迟
+    # supersede 边，可额外带 target_id，但 target_id 不是必填——目标变化后
+    # 用户选择 standalone confirm 时，事件没有触及旧目标。
+    PatchOp.CONFIRM: ("id",),
+    # edit 的权威是新文本；reason 可选（例如说明为何丢弃了延迟边）。
+    PatchOp.EDIT: ("id", "text"),
+    # reject 与 retire 同构：事实被移除，可记录的是拒绝理由；text 可选，
+    # 用来在创建事件之外保留一份被拒文本的审计副本。
+    PatchOp.REJECT: ("id", "reason"),
 }
 
 

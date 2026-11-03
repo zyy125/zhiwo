@@ -538,7 +538,7 @@ def test_add_rejects_text_that_breaks_the_line_grammar(text: str) -> None:
     assert doc.render() == "# 价值观\n"
 
 
-@pytest.mark.parametrize("op", ["compress", "adopt", "retire"])
+@pytest.mark.parametrize("op", ["compress", "adopt", "retire", "confirm", "edit", "reject"])
 def test_unsupported_ops_are_rejected_not_applied(op: str) -> None:
     doc = document("# 价值观\n")
     plan = run(
