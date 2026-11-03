@@ -399,3 +399,68 @@ then over-budget is not detected. M8 can reuse `_write_merge` and
 for review merges. `ChangelogPatch` readers now accept minimal rejection
 records; no released reader exists to break. The contract (`SPEC.md`) and
 `profile.yaml` are unchanged.
+
+## D-008 — M5 extract: opaque core view, hash-keyed recordings, and malformed output as data
+
+**Date:** 2026-11-02 · **Status:** accepted
+
+**Context.** M5 lands the only model call site (plan §5 step 5). It has to hand
+a post-reconcile `core_view` to the model, make the call swappable for tests,
+and decide what happens when the model returns something that is not a patch
+array. M5 and M6 are independently schedulable (plan §7), so the boundary
+between "who renders the view" and "who consumes it" cannot be left implicit.
+
+**Decision.**
+
+1. **`core_view` is an opaque string supplied by the caller.** M6 owns both
+   views and their rendering; extract only embeds the string in a
+   `<core_view>` block. This keeps M5 and M6 parallel and prevents extract
+   from growing a second renderer whose format can drift from the reader view.
+   The capture is passed as raw lines plus an absolute `first_line`, so prompt
+   line numbers use the same coordinates as `#L<n>`; extract does not read the
+   journal itself.
+2. **The provider protocol is one prompt in, one string out, plus an
+   identity.** No chat-message, tool-call, or SDK types cross the boundary.
+   The identity goes into the changelog's `extractor` field (SPEC §3), so it
+   must be stable and non-empty. The OpenAI-compatible adapter is M9.
+3. **Malformed model output is data, not an exception.** A response that
+   cannot be parsed yields an empty draft tuple plus a diagnostic
+   (`ExtractResult.error`); only transport/authentication failures raise
+   `ProviderError`. This is what lets the caller keep the journal append
+   committed (iron rule #2); M7 turns the diagnostic into a warning rather
+   than failing capture. Parsing tolerates Markdown fences, surrounding prose,
+   `{"patches": [...]}`, and a single patch object; non-mapping list entries
+   are preserved for M4 to report as malformed instead of being silently
+   dropped.
+4. **Extract emits raw drafts only.** It does not assign ids, resolve
+   `source`, check evidence, or protect locked facts. The prompt asks for the
+   right behaviour, but validation remains M4's border (D-007): a model can be
+   wrong without becoming an authority.
+5. **Recordings are JSONL keyed by the prompt's SHA-256.** Each record carries
+   `version`, `identity`, `prompt_sha256`, and `response`, in UTF-8 with CJK
+   left readable. The full prompt is deliberately not stored: it contains the
+   core view (personal context), and copying it into test fixtures would create
+   a second dossier outside the dossier. A prompt change makes replay fail
+   loudly instead of silently reusing an old response; the prompt snapshot test
+   explains what changed. Replay never falls back to a live provider.
+6. **The prompt is English and the source-language rule is pinned.** Fact text
+   and evidence must stay in the source language; the prompt says so
+   explicitly and a committed snapshot includes the sentence. The prompt
+   contains no current time or random value, so snapshots are deterministic.
+   Target sections come from `profile.yaml` (journal excluded) and are never
+   hardcoded. Relative-date grounding is left for a later milestone because
+   the capture input does not yet carry an observation date.
+
+**Why.** The alternative — extract rendering the core view, storing full
+prompts in recordings, or raising on bad model output — would each create a
+second owner for something the contract already assigns elsewhere: M6 for
+views, the dossier for personal context, and the journal write for durability.
+Keeping those owners separate is what makes the model boundary replaceable
+without changing on-disk semantics.
+
+**Consequences.** M7 must catch `ProviderError`, pass an empty draft list to
+merge, and print the diagnostic without blocking the journal commit. M6 must
+supply a stable core-view string; if its rendering changes, the prompt
+snapshot and recording hashes are expected to be re-recorded deliberately.
+M9 adds the network client behind the same `Provider` protocol. The contract
+(`SPEC.md`) and `profile.yaml` are unchanged.
