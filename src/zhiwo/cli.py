@@ -14,15 +14,16 @@ M7 落地的五个入口：
 - ``me why <f_id>`` —— 经 changelog 的溯源；
 - ``me diff [git-args]`` —— 工作区 vs HEAD。
 
-M8 的 ``review`` / ``export`` / ``ask`` 尚未注册。它们被列在
-``_RESERVED_COMMANDS`` 里，避免在被实现之前被"未知子命令 → 捕获"的
-回退吞掉——把 ``review`` 当成一句话写进 journal 是比报错糟糕得多的
-失败方式。
+M8 补齐另外三个入口：``me review``（逐条确认/编辑/拒绝 pending 推断）、
+``me export``（reader view 导出）与 ``me ask``（把 reader view 注入模型
+回答问题）。它们与捕获一样只做渲染；锁、reconcile、写盘与提交仍在
+``pipeline`` / ``merge`` 里。
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -30,30 +31,33 @@ from pathlib import Path
 from typing import Any
 
 import click
+from wcwidth import wcswidth
 
 from zhiwo import __version__
 from zhiwo.errors import ZhiwoError
 from zhiwo.llm import Provider, ReplayProvider
-from zhiwo.merge import MergeResult
-from zhiwo.models import ChangelogPatch, PatchOp
+from zhiwo.merge import MergeResult, ReviewAction, ReviewOutcome
+from zhiwo.models import ChangelogPatch, Clearance, PatchOp
 from zhiwo.pipeline import (
     CaptureOutcome,
     ConflictPreview,
+    PendingReview,
     ShowSelection,
     WhyResult,
+    answer_question,
+    build_ask_context,
     capture,
     diff,
     explain,
+    export_reader,
     init_dossier,
+    pending_reviews,
     preview_conflicts,
+    review_pending,
     select_records,
 )
 from zhiwo.recall import FactRecord, ProvenanceEvent
-from zhiwo.store import Dossier, default_dossier_root
-
-# 尚未实现的命令名（M8）。保留它们只为让"未知词回退捕获"不误吞命令；
-# M8 注册同名命令后，``resolve_command`` 的第一条件自然会先命中实现。
-_RESERVED_COMMANDS = frozenset({"review", "export", "ask"})
+from zhiwo.store import Dossier, atomic_write, default_dossier_root
 
 
 @dataclass(slots=True)
@@ -80,22 +84,17 @@ class ZhiwoGroup(click.Group):
     要求用户先学会一个命令名。click 文档把 ``resolve_command`` 定为
     这个需求的正规扩展点（plan §2 因此选 click 而非 typer）。
 
-    只改写"第一个参数不是选项、也不是已知命令/保留命令"的情况：
+    只改写"第一个参数不是选项、也不是已知命令"的情况：
 
     - ``--help`` / ``--version`` / ``--dossier`` 走正常解析；
-    - ``show`` 等已知命令走正常分发；
+    - ``show`` / ``review`` / ``export`` / ``ask`` 等已知命令走正常分发；
     - 其余整段 argv 交给隐藏的 ``capture`` 命令，多词自动拼成一句话。
     """
 
     def resolve_command(
         self, ctx: click.Context, args: list[str]
     ) -> tuple[str | None, click.Command | None, list[str]]:
-        if (
-            args
-            and not args[0].startswith("-")
-            and args[0] not in self.commands
-            and args[0] not in _RESERVED_COMMANDS
-        ):
+        if args and not args[0].startswith("-") and args[0] not in self.commands:
             return "capture", self.commands["capture"], args
         return super().resolve_command(ctx, args)
 
@@ -216,6 +215,124 @@ def why(app: AppContext, fact_id: str) -> None:
     _render_why(result)
 
 
+@cli.command()
+@click.pass_obj
+def review(app: AppContext) -> None:
+    """Confirm, edit, or reject pending facts (SPEC §2.3).
+
+    One keystroke per fact: c=confirm, e=edit, r=reject, s=skip, q=quit.
+    A deferred supersede is applied only if its target is still active and
+    unlocked; otherwise you are offered a standalone confirmation.
+    """
+    try:
+        dossier = _dossier(app)
+        items = pending_reviews(dossier)
+    except ZhiwoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not items:
+        click.echo("no pending facts")
+        return
+
+    _render_review_list(items)
+    try:
+        for item in items:
+            try:
+                if not _review_one(dossier, app, item):
+                    break
+            except ZhiwoError as exc:
+                # 列表是快照；锁内重新读取后事实可能已不再 pending。报错并
+                # 继续下一条，比让整次 review 崩掉更接近"人一条条裁决"的
+                # 交互模型，也不会留下未解释的半状态。
+                click.echo(f"warning: {exc}", err=True)
+    except (click.Abort, EOFError):
+        click.echo("\nreview stopped; remaining facts stay pending", err=True)
+
+    remaining = pending_reviews(dossier)
+    if remaining:
+        click.echo(f"{len(remaining)} fact(s) still pending")
+    else:
+        click.echo("no pending facts left")
+
+
+@cli.command(name="export")
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    metavar="FILE",
+    help="Write the reader view to FILE instead of stdout.",
+)
+@click.option(
+    "--clearance",
+    type=click.Choice([item.value for item in Clearance]),
+    default=Clearance.NORMAL.value,
+    show_default=True,
+    help="Reader clearance; high includes high-sensitivity sections (never the journal).",
+)
+@click.pass_obj
+def export_command(app: AppContext, output: Path | None, clearance: str) -> None:
+    """Export the reader view as GFM Markdown (SPEC §5)."""
+    try:
+        text = export_reader(_dossier(app), clearance=Clearance(clearance))
+    except ZhiwoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if output is None:
+        click.echo(text, nl=False)
+        return
+    try:
+        atomic_write(output, text)
+    except OSError as exc:
+        raise click.ClickException(f"cannot write {output}: {exc}") from exc
+
+
+@cli.command(name="ask")
+@click.argument("question", nargs=-1, required=True)
+@click.option(
+    "--clearance",
+    type=click.Choice([item.value for item in Clearance]),
+    default=Clearance.NORMAL.value,
+    show_default=True,
+    help="Reader clearance; high also injects journal keyword hits.",
+)
+@click.option(
+    "--show-context",
+    is_flag=True,
+    help="Print the exact context blocks injected into the model (stderr).",
+)
+@click.pass_obj
+def ask_command(
+    app: AppContext, question: Sequence[str], clearance: str, show_context: bool
+) -> None:
+    """Ask a question with the reader view injected (SPEC §5 / §6)."""
+    try:
+        dossier = _dossier(app)
+    except ZhiwoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    provider = _require_provider(app)
+    try:
+        context = build_ask_context(
+            dossier,
+            " ".join(question),
+            clearance=Clearance(clearance),
+        )
+    except ZhiwoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if show_context:
+        click.echo(context.render(), err=True)
+        click.echo("", err=True)
+
+    try:
+        result = answer_question(context, provider)
+    except ZhiwoError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(result.answer)
+
+
 @cli.command(
     name="diff",
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
@@ -261,6 +378,232 @@ def _provider(app: AppContext) -> Provider | None:
     if app.replay is not None:
         return ReplayProvider(app.replay)
     return None
+
+
+def _require_provider(app: AppContext) -> Provider:
+    """``me ask`` 必须有 provider：没有答案时不能伪装成成功。"""
+    provider = _provider(app)
+    if provider is None:
+        raise click.ClickException(
+            "no LLM provider configured; `me ask` needs a provider "
+            "(use --replay FILE; live providers land in M9)"
+        )
+    return provider
+
+
+# --- review（plan §3 决策 8 / SPEC §2.3）-----------------------------------
+
+
+def _review_one(dossier: Dossier, app: AppContext, item: PendingReview) -> bool:
+    """处理一条 pending 事实；返回 False 表示用户选择退出整个 review。"""
+    _render_review_item(item)
+    choice = _read_choice("  [c]onfirm [e]dit [r]eject [s]kip [q]uit > ", "cersq")
+    if choice == "q":
+        return False
+    if choice == "s":
+        click.echo("  skipped")
+        return True
+
+    if choice == "e":
+        text = _prompt_edit_text(item.record.text)
+        if text is None:
+            return True
+        outcome = review_pending(
+            dossier,
+            item.record.id,
+            ReviewAction.EDIT,
+            text=text,
+            now=app.now,
+        )
+        _render_review_outcome(outcome)
+        return True
+
+    if choice == "r":
+        outcome = review_pending(
+            dossier,
+            item.record.id,
+            ReviewAction.REJECT,
+            now=app.now,
+        )
+        _render_review_outcome(outcome)
+        return True
+
+    outcome = review_pending(
+        dossier,
+        item.record.id,
+        ReviewAction.CONFIRM,
+        now=app.now,
+    )
+    if outcome.target_changed:
+        _render_target_changed(item, outcome.target_id)
+        followup = _read_choice("  [s]tandalone [e]dit [r]eject [k]eep pending > ", "serk")
+        if followup == "k":
+            return True
+        if followup == "e":
+            text = _prompt_edit_text(item.record.text)
+            if text is None:
+                return True
+            outcome = review_pending(
+                dossier,
+                item.record.id,
+                ReviewAction.EDIT,
+                text=text,
+                now=app.now,
+            )
+        elif followup == "r":
+            outcome = review_pending(
+                dossier,
+                item.record.id,
+                ReviewAction.REJECT,
+                now=app.now,
+            )
+        else:
+            outcome = review_pending(
+                dossier,
+                item.record.id,
+                ReviewAction.CONFIRM,
+                standalone=True,
+                now=app.now,
+            )
+    _render_review_outcome(outcome)
+    return True
+
+
+def _read_choice(prompt: str, allowed: str) -> str:
+    """读一个单键决定；回车/换行被忽略，Ctrl-D 视为退出。
+
+    用 ``click.getchar`` 而不是 ``click.prompt``：plan §1 的承诺是
+    "one keystroke per fact"。输出端显式回显按键，因为 getchar 本身不 echo。
+    """
+    click.echo(prompt, nl=False)
+    while True:
+        char = _read_char()
+        if char in ("\r", "\n"):
+            continue
+        if char == "" or char == "\x04":
+            click.echo("")
+            raise click.Abort()
+        lowered = char.lower()
+        if lowered in allowed:
+            click.echo(lowered)
+            return lowered
+        click.echo(f"  choose one of: {', '.join(allowed)}", err=True)
+        click.echo(prompt, nl=False)
+
+
+def _read_char() -> str:
+    """读一个按键；没有终端（管道/CI）时退回逐行读取。
+
+    ``click.getchar`` 在真正的 TTY 上提供"一键"体验，但它会尝试打开
+    ``/dev/tty``；子进程里没有控制终端时那是 ``OSError``，不是用户错误。
+    回退到 stdin 的一行并取首个非空白字符，让 ``printf 'c\\n' | me review``
+    这种脚本化输入仍然可用。
+    """
+    try:
+        return click.getchar()
+    except OSError:
+        line = sys.stdin.readline()
+        if not line:
+            return ""
+        stripped = line.strip()
+        return stripped[0] if stripped else "\n"
+
+
+def _prompt_edit_text(current: str) -> str | None:
+    """读取编辑后的文本；空输入视为放弃，保持 pending。"""
+    text = click.prompt("  new text", default=current, show_default=False)
+    if not text.strip():
+        click.echo("  empty text; fact stays pending", err=True)
+        return None
+    return text
+
+
+def _render_review_list(items: Sequence[PendingReview]) -> None:
+    """列出 pending 事实；用 wcwidth 对齐 CJK 双宽字符。"""
+    click.echo(f"pending {len(items)}")
+    id_width = max(_display_width(item.record.id) for item in items)
+    location_width = max(_display_width(_review_location(item.record)) for item in items)
+    text_width = max(_display_width(item.record.text) for item in items)
+    for item in items:
+        kind = item.record.kind.value if item.record.kind is not None else "unknown"
+        location = _review_location(item.record)
+        target = (
+            f"supersedes {item.target_id} ({_target_state(item.target)})"
+            if item.target_id is not None
+            else "-"
+        )
+        # text 列之后还有 target 列，cjk 文本必须按显示宽度补齐；否则
+        # 一条中文推断会把目标状态推到右边，表格看起来像坏了（wcwidth）。
+        click.echo(
+            f"  {_pad(item.record.id, id_width)}  "
+            f"{_pad(location, location_width)}  "
+            f"[pending, {kind}]  "
+            f"{_pad(item.record.text, text_width)}  "
+            f"{target}"
+        )
+
+
+def _render_review_item(item: PendingReview) -> None:
+    """渲染单条事实的 review 头部（列表已给过位置，这里强调当前项）。"""
+    click.echo("")
+    click.echo(f"{item.record.id}  {_review_location(item.record)}")
+    click.echo(f"  text: {item.record.text}")
+    if item.target_id is not None:
+        click.echo(f"  supersedes: {item.target_id} ({_target_state(item.target)})")
+
+
+def _render_target_changed(item: PendingReview, target_id: str | None) -> None:
+    """OQ#4：延迟边目标已前进/被锁/不可重写时的提示。"""
+    target = item.target
+    state = _target_state(target)
+    click.echo(
+        f"  warning: deferred target {target_id} is {state}; "
+        "the edge will not be applied automatically",
+        err=True,
+    )
+
+
+def _render_review_outcome(outcome: ReviewOutcome) -> None:
+    """打印一次 review 决定的结果（成功时含 merge/commit）。"""
+    verbs = {"confirm": "confirmed", "edit": "edited", "reject": "rejected"}
+    verb = verbs.get(outcome.action.value, outcome.action.value)
+    if outcome.merge is None:
+        click.echo(f"  {verb} {outcome.fact_id}: no write")
+        return
+    merged = outcome.merge
+    click.echo(f"  {verb} {outcome.fact_id}  merge {merged.merge_id}  commit {merged.commit}")
+    _render_reconcile_counts(merged)
+    if merged.budget is not None and merged.budget.over:
+        click.echo(
+            "warning: reader view is over budget; the review decision was applied "
+            "anyway (D-002). Distill (v0.5) is the mechanism that will drain this queue.",
+            err=True,
+        )
+
+
+def _review_location(record: FactRecord) -> str:
+    path = record.path if record.path is not None else "(unknown)"
+    line = f":L{record.line_no}" if record.line_no is not None else ""
+    return f"{path}{line}"
+
+
+def _target_state(record: FactRecord | None) -> str:
+    if record is None:
+        return "missing or archived"
+    flags = record.status.value
+    if record.locked:
+        flags = f"{flags}, locked"
+    return flags
+
+
+def _display_width(text: str) -> int:
+    """终端显示宽度；控制字符等不可测字符退回字符数（wcswidth 返回 -1）。"""
+    width = wcswidth(text)
+    return len(text) if width < 0 else width
+
+
+def _pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - _display_width(text))
 
 
 # --- 捕获摘要（plan §5 步骤 12）--------------------------------------------

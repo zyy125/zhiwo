@@ -1,4 +1,4 @@
-"""M7 的 CLI：click 回退分发、端到端捕获与只读命令。
+"""M7/M8 的 CLI：click 回退分发、端到端捕获、review、export 与 ask。
 
 plan §7 M7 的三条关键测试在这里各有落点：
 
@@ -22,11 +22,13 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from wcwidth import wcswidth
 
 from zhiwo.cli import AppContext, cli
 from zhiwo.errors import ProviderError
 from zhiwo.extract import build_extract_prompt
 from zhiwo.llm import MockProvider, prompt_sha256
+from zhiwo.pipeline import capture, pending_reviews
 from zhiwo.recall import load_documents, render_core_view
 from zhiwo.store import Dossier, bootstrap_dossier
 
@@ -52,6 +54,62 @@ REPLAY_RESPONSE = json.dumps(
     ],
     ensure_ascii=False,
 )
+
+
+DEFERRED_RESPONSE = json.dumps(
+    [
+        {
+            "op": "add",
+            "target": "about/career.md",
+            "kind": "statement",
+            "text": "决定直接工作，不读博",
+            "evidence": CAPTURE,
+        },
+        {
+            "op": "supersede",
+            "target_id": "f_009",
+            "kind": "inference",
+            "text": "也许该直接工作",
+            "evidence": "面试挂了",
+        },
+    ],
+    ensure_ascii=False,
+)
+
+TWO_PENDING_RESPONSE = json.dumps(
+    [
+        {
+            "op": "supersede",
+            "target_id": "f_009",
+            "kind": "inference",
+            "text": "也许该直接工作",
+            "evidence": "面试挂了",
+        },
+        {
+            "op": "supersede",
+            "target_id": "f_010",
+            "kind": "inference",
+            "text": "也许应该先工作两年再考虑读博",
+            "evidence": "面试挂了",
+        },
+    ],
+    ensure_ascii=False,
+)
+
+
+def _prepare_deferred_dossier(root: Path, response: str = DEFERRED_RESPONSE) -> Dossier:
+    """在临时档案里制造 pending 推断；供脚本按键与 review UI 测试使用。"""
+    dossier = Dossier(root)
+    (root / "about" / "values.md").write_text(
+        "- 想读博 <!-- f_009 -->\n- 想留北京 <!-- f_010 -->\n", encoding="utf-8"
+    )
+    capture(
+        dossier,
+        CAPTURE,
+        provider=MockProvider(response, identity="mock-cli"),
+        now=FIXED,
+    )
+    return dossier
 
 
 def _record_replay(path: Path, dossier_root: Path, *, first_line: int = 3) -> Path:
@@ -159,17 +217,201 @@ def test_provider_failure_still_commits_the_journal(tmp_path: Path, git_identity
     assert _commit_count(root) == 1
 
 
-def test_reserved_future_commands_are_not_swallowed_by_capture(
+def test_review_is_a_registered_command_not_capture(
     tmp_path: Path, git_identity: None
 ) -> None:
-    """``me review`` 在 M8 之前应报错，绝不能把 "review" 写进 journal。"""
+    """``me review`` 不能再被"未知词 → 捕获"吞掉。"""
     root = bootstrap_dossier(tmp_path / "me").root
 
     result = CliRunner().invoke(cli, ["--dossier", str(root), "review"])
 
-    assert result.exit_code != 0
-    assert "No such command 'review'" in result.output
+    assert result.exit_code == 0, result.output
+    assert "no pending facts" in result.output
     assert list((root / "journal").glob("*.md")) == []
+
+
+def test_review_confirm_with_a_scripted_key(tmp_path: Path, git_identity: None) -> None:
+    """``c`` 一键确认 deferred pair：两行都改写，且产生一次 review 提交。"""
+    root = bootstrap_dossier(tmp_path / "me").root
+    dossier = _prepare_deferred_dossier(root)
+    (item,) = pending_reviews(dossier)
+    pending_id = item.record.id
+    commits_before = _commit_count(root)
+
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(root), "review"],
+        input="c",
+        obj=AppContext(now=FIXED),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"confirmed {pending_id}" in result.output
+    values = (root / "about" / "values.md").read_text(encoding="utf-8")
+    assert f"- ~~想读博~~ <!-- f_009 superseded-by:{pending_id} -->" in values
+    assert f"- 也许该直接工作 <!-- {pending_id} supersedes:f_009 -->" in values
+    assert _commit_count(root) == commits_before + 1
+
+
+def test_review_edit_and_reject_with_scripted_keys(tmp_path: Path, git_identity: None) -> None:
+    """``e<text>`` 后 ``r``：第一条 locked，第二条从文件移除。"""
+    root = bootstrap_dossier(tmp_path / "me").root
+    dossier = _prepare_deferred_dossier(root, TWO_PENDING_RESPONSE)
+    first, second = pending_reviews(dossier)
+
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(root), "review"],
+        input="e新文本\nr",
+        obj=AppContext(now=FIXED),
+    )
+
+    assert result.exit_code == 0, result.output
+    values = (root / "about" / "values.md").read_text(encoding="utf-8")
+    assert f"- 新文本 <!-- {first.record.id} locked -->" in values
+    assert "也许应该先工作两年再考虑读博" not in values
+    assert second.record.id not in values
+    assert "f_009 superseded-by" not in values
+    assert "f_010 superseded-by" not in values
+
+
+def test_review_falls_back_to_line_input_without_a_terminal(
+    dossier: Dossier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没有 /dev/tty 时按键读取退回 stdin 行首字符，而不是抛 OSError。"""
+    def no_tty(echo: bool = False) -> str:
+        raise OSError("no controlling terminal")
+
+    monkeypatch.setattr("zhiwo.cli.click.getchar", no_tty)
+
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(dossier.root), "review"],
+        input="q\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "1 fact(s) still pending" in result.output
+
+
+def test_review_list_aligns_wide_cjk_columns(dossier: Dossier) -> None:
+    """CJK 文本列的显示宽度由 wcwidth 补齐，目标列起点相同。"""
+    values = dossier.root / "about" / "values.md"
+    values.write_text(
+        values.read_text(encoding="utf-8")
+        + "- 也许该直接工作 <!-- f_060 supersedes:f_001 pending -->\n"
+        + "- 也许应该先工作两年再认真考虑读博 <!-- f_061 supersedes:f_002 pending -->\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["--dossier", str(dossier.root), "review"], input="q")
+
+    assert result.exit_code == 0, result.output
+    rows = [
+        line
+        for line in result.output.splitlines()
+        if line.startswith("  f_0") and "supersedes" in line
+    ]
+    assert len(rows) == 2
+    assert wcswidth(rows[0][: rows[0].index("supersedes")]) == wcswidth(
+        rows[1][: rows[1].index("supersedes")]
+    )
+
+
+def test_export_normal_reader_view(dossier: Dossier) -> None:
+    """默认 normal：无 high 分区、无 pending、无 superseded、无 journal。"""
+    result = CliRunner().invoke(cli, ["--dossier", str(dossier.root), "export"])
+
+    assert result.exit_code == 0, result.output
+    assert "厌恶风险，偏好确定性" in result.output
+    assert "二面反馈：项目深度不够" in result.output
+    assert "根据二面反馈补项目深度" not in result.output
+    assert "想读博" not in result.output
+    assert "昨晚只睡了" not in result.output
+    assert "<!--" not in result.output
+    assert "~~" not in result.output
+
+
+def test_export_high_clearance_and_output_file(dossier: Dossier, tmp_path: Path) -> None:
+    health = dossier.root / "about" / "health.md"
+    health.write_text(
+        "- 对花生过敏 <!-- f_090 -->\n- 偏好 **确定** 的方案 <!-- f_091 -->\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "reader.md"
+
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(dossier.root), "export", "--clearance", "high", "-o", str(output)],
+    )
+
+    assert result.exit_code == 0, result.output
+    text = output.read_text(encoding="utf-8")
+    assert "对花生过敏" in text
+    assert "**确定**" in text
+    assert "journal/2026-10-11.md" not in text
+    assert "昨晚只睡了" not in text
+
+    normal = CliRunner().invoke(
+        cli, ["--dossier", str(dossier.root), "export", "--clearance", "normal"]
+    )
+    assert "对花生过敏" not in normal.output
+
+
+def test_ask_normal_injects_only_the_reader_view(dossier: Dossier) -> None:
+    provider = MockProvider("先补项目深度。", identity="mock-ask")
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(dossier.root), "ask", "我该准备什么？", "--show-context"],
+        obj=AppContext(provider=provider, provider_explicit=True),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "先补项目深度。" in result.output
+    assert "<reader_view>" in result.output
+    assert "<journal_hits>" not in result.output
+    prompt = provider.prompts[0]
+    assert "二面反馈：项目深度不够" in prompt
+    assert "根据二面反馈补项目深度" not in prompt
+    assert "昨晚只睡了" not in prompt
+
+
+def test_ask_high_clearance_adds_high_sections_and_journal_hits(dossier: Dossier) -> None:
+    (dossier.root / "about" / "health.md").write_text(
+        "- 对花生过敏 <!-- f_090 -->\n", encoding="utf-8"
+    )
+    provider = MockProvider("面试反馈说明需要补项目深度。", identity="mock-ask")
+
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(dossier.root), "ask", "面试", "--clearance", "high", "--show-context"],
+        obj=AppContext(provider=provider, provider_explicit=True),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "<journal_hits>" in result.output
+    prompt = provider.prompts[0]
+    assert "对花生过敏" in prompt
+    assert "journal/2026-10-11.md#L7" in prompt
+    assert "面试挂了" in prompt
+
+
+def test_ask_requires_a_provider(dossier: Dossier) -> None:
+    result = CliRunner().invoke(cli, ["--dossier", str(dossier.root), "ask", "我该做什么？"])
+
+    assert result.exit_code != 0
+    assert "no LLM provider configured" in result.output
+
+
+def test_ask_reports_provider_failure(dossier: Dossier) -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(dossier.root), "ask", "我该做什么？"],
+        obj=AppContext(provider=_FailingProvider(), provider_explicit=True),
+    )
+
+    assert result.exit_code != 0
+    assert "network down" in result.output
 
 
 def test_init_bootstraps_the_contract_tree(tmp_path: Path) -> None:
@@ -308,7 +550,17 @@ def test_capture_warns_loudly_when_over_budget(tmp_path: Path, git_identity: Non
     assert "applied  2" in result.output
 
 
-@pytest.mark.parametrize("command", [["--help"], ["show", "--help"], ["diff", "--help"]])
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["--help"],
+        ["show", "--help"],
+        ["diff", "--help"],
+        ["review", "--help"],
+        ["export", "--help"],
+        ["ask", "--help"],
+    ],
+)
 def test_help_is_available(command: list[str]) -> None:
     result = CliRunner().invoke(cli, command)
 
