@@ -24,14 +24,16 @@
 **不回滚**——journal 永不被回滚，下一次提交会带上这些改动；半合并的恢复是
 选择性的 ``git checkout -- about/ goals/``。
 
-本模块**不实现** review 的 confirm/edit/reject（M8）：那三条分支共用这里的
-写盘/提交尾段（:func:`_write_merge`），但它们的语义与 changelog op 选择属
-review 里程碑。add/supersede/link 之外的操作（compress/adopt/retire）在
-v0.2 一律拒绝并记录。
+M8 的 review 三条分支（confirm/edit/reject）也在这里：纯核心
+:func:`apply_review` 负责语义，薄壳 :func:`review_dossier` 复用
+:func:`_write_merge` 的写盘/提交尾段。add/supersede/link 之外的操作
+（compress/adopt/retire 以及 review-only op）若由 extractor 草稿发出，
+一律拒绝并记录——模型不能替人做 review 决定。
 """
 
 from __future__ import annotations
 
+import enum
 import re
 from collections.abc import Callable, Mapping, Sequence, Set
 from copy import deepcopy
@@ -65,6 +67,12 @@ from zhiwo.store import Dossier, JournalAppend
 # 接受的写操作（v0.2）。compress 属 distill（v0.5）；adopt/retire 属
 # reconcile（M3），extract 不得发射——它们会被拒绝并记录，而不是崩溃。
 _APPLICABLE_OPS = frozenset({PatchOp.ADD, PatchOp.SUPERSEDE, PatchOp.LINK})
+
+# review 合并没有捕获输入，也没有模型参与。changelog 的 input/extractor
+# 字段仍必须如实、非空（SPEC §3），因此用稳定的字面量说明"这是人工裁决"，
+# 而不是伪造一个 journal 路径或 extractor 身份（D-011）。
+_REVIEW_INPUT = "review"
+_REVIEW_EXTRACTOR = "human"
 
 # 证据匹配的空白折叠：Python 的 \s 覆盖 CJK 全角空格（U+3000）等 Unicode
 # 空白；折叠后两端再 strip。R1 说严格度是实现旋钮，这里钉住"空白折叠
@@ -241,6 +249,50 @@ class MergeResult:
         )
 
 
+class ReviewAction(enum.StrEnum):
+    """人对 pending 事实的三种裁决（M8 / SPEC §2.3）。
+
+    取值与 changelog op 同名，让"用户按了什么"与"账本写了什么"之间
+    没有翻译层；D-011 记录了这一词汇扩展。
+    """
+
+    CONFIRM = "confirm"
+    EDIT = "edit"
+    REJECT = "reject"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewPlan:
+    """纯核心的 review 结果：改写后的文档 + 一条待记录的事件。
+
+    ``patch`` 为 ``None`` 表示这次没有做出可写入的决定，只有一种情况：
+    延迟 supersede 的目标已经变化，需要用户重新选择（OQ#4）。此时
+    ``target_changed`` 为真，``target_id`` 指向那个已经不能应用的目标；
+    ``documents`` 保持调用方交来的快照（深拷贝后未改动）。
+    """
+
+    documents: tuple[tuple[Section, FactDocument], ...]
+    patch: ChangelogPatch | None
+    target_changed: bool = False
+    target_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewOutcome:
+    """薄壳的 review 结果：写入时带完整 ``MergeResult``，否则说明原因。
+
+    与 :class:`MergeResult` 分开，是因为"目标已变化、需要再问一次"不是
+    一次 merge，也不应产生 changelog 或 commit；把它伪装成一次空 merge
+    会让调用方误以为磁盘上已经发生过一次决定。
+    """
+
+    fact_id: str
+    action: ReviewAction
+    merge: MergeResult | None
+    target_changed: bool = False
+    target_id: str | None = None
+
+
 @dataclass(slots=True)
 class _LocatedFact:
     """事实索引里的一项：它属于哪个分区/文档，以及它的行对象。
@@ -344,6 +396,218 @@ def apply_patches(
         conflicts=tuple(conflicts),
         assigned_ids=tuple(assigned),
     )
+
+
+def apply_review(
+    documents: Sequence[tuple[Section, FactDocument]],
+    *,
+    fact_id: str,
+    action: ReviewAction,
+    text: str | None = None,
+    standalone: bool = False,
+) -> ReviewPlan:
+    """在内存文档上执行一个人工 review 决定（纯核心，零 I/O）。
+
+    语义（SPEC §2.3 / plan §3 决策 9 / D-011）：
+
+    - ``confirm``：pending → active。若事实带延迟 ``supersedes`` 边且目标
+      仍是 active、未 locked、可合法重写，则同时把目标划掉并写入
+      ``superseded-by``。目标变化时返回 ``target_changed``，绝不把边
+      应用到一条已经前进或被人锁定的事实上（OQ#4：first confirmation wins）。
+    - ``edit``：人工改写是新的断言，因此事实转为 ``locked`` 并丢弃延迟边；
+      目标事实绝不因一次措辞修改而被自动取代。
+    - ``reject``：行从文件移除，事件由 changelog 记录（墓碑）；目标不动。
+
+    所有改行都先预渲染再落地：一次失败的 review 不应留下"新行写了一半、
+    目标已经被划掉"的半状态。文档同样是调用方交来的快照（薄壳负责深拷贝），
+    纯核心本身只经 :meth:`~zhiwo.factfile.FactLine.rewrite` 改行。
+    """
+    document_list = list(documents)
+    facts_by_id = _index_facts(document_list)
+    located = facts_by_id.get(fact_id)
+    if located is None:
+        raise ZhiwoError(f"no fact {fact_id!r} in any fact file (unknown or archived)")
+
+    marker = located.line.marker
+    assert marker is not None  # _index_facts 只收 FACT 行
+    if marker.status is not FactStatus.PENDING:
+        raise ZhiwoError(
+            f"fact {fact_id} is {marker.status.value}, not pending; "
+            "only pending facts can be reviewed"
+        )
+
+    fact_text = located.line.text
+    assert fact_text is not None  # FACT 行不变量
+
+    if action is ReviewAction.CONFIRM:
+        return _confirm_review(
+            document_list,
+            facts_by_id=facts_by_id,
+            located=located,
+            fact_text=fact_text,
+            fact_id=fact_id,
+            marker=marker,
+            standalone=standalone,
+        )
+    if action is ReviewAction.EDIT:
+        return _edit_review(
+            document_list,
+            located,
+            fact_id=fact_id,
+            marker=marker,
+            text=text,
+        )
+    return _reject_review(document_list, located, fact_text=fact_text, fact_id=fact_id)
+
+
+def _confirm_review(
+    documents: list[tuple[Section, FactDocument]],
+    *,
+    facts_by_id: Mapping[str, _LocatedFact],
+    located: _LocatedFact,
+    fact_text: str,
+    fact_id: str,
+    marker: Marker,
+    standalone: bool,
+) -> ReviewPlan:
+    """确认一条 pending 事实；延迟边是否应用由目标当前状态决定。
+
+    ``standalone`` 只在目标已变化时使用：用户选择"仅确认新事实"后，
+    延迟边被丢弃。目标仍然 active 时，这个参数没有意义——那正是延迟
+    supersede 应当生效的时刻（SPEC §2.3 的 deferred supersede）。
+    """
+    target_id = marker.supersedes
+    target = facts_by_id.get(target_id) if target_id is not None else None
+    edge_blocked = target_id is not None and not _edge_applicable(target)
+
+    if edge_blocked and not standalone:
+        return ReviewPlan(
+            documents=tuple(documents),
+            patch=None,
+            target_changed=True,
+            target_id=target_id,
+        )
+
+    reason: str | None = None
+    new_marker = replace(marker, pending=False)
+    if edge_blocked:
+        # 目标已经前进/被锁/不可重写：standalone confirm 丢弃惰性边，
+        # 避免盘上出现一条指向"已经不该被取代"的目标的 active supersedes。
+        new_marker = replace(marker, pending=False, supersedes=None)
+        reason = (
+            f"target {target_id} was no longer active or writable; "
+            "confirmed standalone without applying the deferred edge"
+        )
+    elif target is not None and target_id is not None:
+        target_marker = target.line.marker
+        target_text = target.line.text
+        assert target_marker is not None and target_text is not None
+        # 两行都先渲染成功，再动任何一行（与 _apply_supersede 同一顺序）。
+        render_fact_line(
+            target_text,
+            replace(target_marker, superseded_by=fact_id),
+            struck=True,
+            newline=_line_ending(target.line.raw),
+        )
+        render_fact_line(fact_text, new_marker, newline=located.document.newline)
+        target.line.rewrite(
+            target_text,
+            replace(target_marker, superseded_by=fact_id),
+            struck=True,
+        )
+
+    located.line.rewrite(fact_text, new_marker, struck=False)
+    return ReviewPlan(
+        documents=tuple(documents),
+        patch=ChangelogPatch(
+            op=PatchOp.CONFIRM,
+            id=fact_id,
+            target_id=target_id if edge_blocked is False and target_id is not None else None,
+            reason=reason,
+        ),
+    )
+
+
+def _edit_review(
+    documents: list[tuple[Section, FactDocument]],
+    located: _LocatedFact,
+    *,
+    fact_id: str,
+    marker: Marker,
+    text: str | None,
+) -> ReviewPlan:
+    """把 pending 事实改写为人工锁定事实，并丢弃延迟边（D-011）。"""
+    if text is None or not text:
+        raise ZhiwoError(f"editing {fact_id} needs non-empty replacement text")
+    try:
+        check_fact_text(text)
+    except MarkerError as exc:
+        raise ZhiwoError(f"edited text would break the line grammar: {_clip(str(exc))}") from exc
+
+    new_marker = replace(marker, pending=False, locked=True, supersedes=None)
+    # 先渲染再落地：非法文本已经由 check_fact_text 拦住，这里仍保留
+    # 同一防御顺序，让"改写失败"不可能留下半行。
+    render_fact_line(text, new_marker, newline=_line_ending(located.line.raw))
+    located.line.rewrite(text, new_marker, struck=False)
+
+    reason: str | None = None
+    if marker.supersedes is not None:
+        reason = (
+            f"deferred edge to {marker.supersedes} dropped: an edited fact is a new "
+            "human assertion, not a confirmation of the old inference"
+        )
+    return ReviewPlan(
+        documents=tuple(documents),
+        patch=ChangelogPatch(
+            op=PatchOp.EDIT,
+            id=fact_id,
+            text=text,
+            reason=reason,
+        ),
+    )
+
+
+def _reject_review(
+    documents: list[tuple[Section, FactDocument]],
+    located: _LocatedFact,
+    *,
+    fact_text: str,
+    fact_id: str,
+) -> ReviewPlan:
+    """拒绝 pending 事实：移除行，changelog 记录墓碑，目标不动。"""
+    located.document.lines.remove(located.line)
+    return ReviewPlan(
+        documents=tuple(documents),
+        patch=ChangelogPatch(
+            op=PatchOp.REJECT,
+            id=fact_id,
+            text=fact_text,
+            reason=f"review: rejected pending fact {fact_id}",
+        ),
+    )
+
+
+def _edge_applicable(target: _LocatedFact | None) -> bool:
+    """延迟 supersede 的目标当前是否仍可应用。
+
+    四个条件都是"不应用"的边界：目标不存在（已归档/手删）、不是 active
+    （已被别的确认抢先后又前进）、被 locked（硬规则 5：永不改写人工事实）、
+    或目标文本不可合法重渲染（改写会产出一行坏文法）。任何一条成立都
+    交给用户重新选择，绝不猜。
+    """
+    if target is None:
+        return False
+    marker = target.line.marker
+    if marker is None or marker.status is not FactStatus.ACTIVE or marker.locked:
+        return False
+    text = target.line.text
+    if text is None:
+        return False
+    try:
+        check_fact_text(text)
+    except MarkerError:
+        return False
+    return True
 
 
 def _apply_add(
@@ -714,6 +978,59 @@ def merge_dossier(
     )
 
 
+def review_dossier(
+    dossier: Dossier,
+    *,
+    scan: ReconcileScan,
+    fact_id: str,
+    action: ReviewAction,
+    text: str | None = None,
+    standalone: bool = False,
+    now: datetime | None = None,
+    budget: BudgetEstimator | None = None,
+) -> ReviewOutcome:
+    """在调用方已持锁的前提下落盘一个人工 review 决定。
+
+    与 :func:`merge_dossier` 共用 ``_write_merge`` 的写盘/changelog/commit
+    尾段，因此"一次决定 = 一条 changelog = 一个提交"在两条写路径上只有
+    一份实现。``scan`` 必须是本次锁窗口内刚跑过的 reconcile 快照：人工
+    决定必须基于手改之后的事实状态，而不是 CLI 列表看到时的旧快照。
+
+    ``target_changed=True`` 时不写任何东西——那只是把 OQ#4 的"目标已变化"
+    交回给调用方，让用户重新选择，不是一次空 merge。
+    """
+    plan = apply_review(
+        _clone_documents(scan.documents),
+        fact_id=fact_id,
+        action=action,
+        text=text,
+        standalone=standalone,
+    )
+    if plan.target_changed:
+        return ReviewOutcome(
+            fact_id=fact_id,
+            action=action,
+            merge=None,
+            target_changed=True,
+            target_id=plan.target_id,
+        )
+
+    assert plan.patch is not None  # target_changed 分支之外，纯核心总会产出事件
+    result = _write_merge(
+        dossier,
+        plan.documents,
+        patches=(plan.patch,),
+        reconcile=scan.report,
+        malformed=(),
+        conflicts=(),
+        input_label=_REVIEW_INPUT,
+        extractor=_REVIEW_EXTRACTOR,
+        now=now,
+        budget=budget,
+    )
+    return ReviewOutcome(fact_id=fact_id, action=action, merge=result)
+
+
 def _write_merge(
     dossier: Dossier,
     documents: Sequence[tuple[Section, FactDocument]],
@@ -922,6 +1239,8 @@ def _unsupported_reason(op: PatchOp) -> str:
         return "compress is distill-only (v0.5); the v0.2 merge cannot apply it"
     if op is PatchOp.ADOPT:
         return "adopt is a reconcile-only op; extractor patches may not emit it"
+    if op in (PatchOp.CONFIRM, PatchOp.EDIT, PatchOp.REJECT):
+        return f"{op.value} is a review-only op; extractor patches may not emit it"
     return "retire is a reconcile-only op; extractor patches may not emit it"
 
 
