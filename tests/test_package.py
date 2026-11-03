@@ -130,19 +130,42 @@ def test_recall_api_is_re_exported() -> None:
 
 
 def test_pipeline_api_is_re_exported() -> None:
-    """M7 的编排面：CLI 与 MCP server 共用同一组捕获/查询入口。"""
+    """M7/M8 的编排面：CLI 与 MCP server 共用同一组捕获/查询/review/ask 入口。"""
     for name in (
+        "AskContext",
+        "AskResult",
         "CaptureOutcome",
         "ConflictPreview",
         "DiffResult",
+        "PendingReview",
         "ShowSelection",
         "WhyResult",
+        "answer_question",
+        "ask",
+        "build_ask_context",
+        "build_ask_prompt",
         "capture",
         "diff",
         "explain",
+        "export_reader",
         "init_dossier",
+        "pending_reviews",
         "preview_conflicts",
+        "review_pending",
         "select_records",
+    ):
+        assert name in zhiwo.__all__, name
+        assert getattr(zhiwo, name) is not None, name
+
+
+def test_review_api_is_re_exported() -> None:
+    """M8 的 review 面：纯核心、薄壳与结果类型都从顶层可见。"""
+    for name in (
+        "ReviewAction",
+        "ReviewOutcome",
+        "ReviewPlan",
+        "apply_review",
+        "review_dossier",
     ):
         assert name in zhiwo.__all__, name
         assert getattr(zhiwo, name) is not None, name

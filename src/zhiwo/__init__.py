@@ -6,8 +6,8 @@
 （SPEC §3 的唯一写路径：验证 / 分配 id / 应用 / changelog / 提交，M4）、
 extract（L2：prompt + 模型响应解析 + provider 协议/录制回放，M5）、
 recall（L4：core/reader 视图、token 估算、journal 检索、逻辑记录与
-provenance，M6）与 pipeline/CLI（M7：捕获、init/show/why/diff 的编排与
-渲染）。
+provenance，M6）、pipeline/CLI（M7：捕获、init/show/why/diff 的编排与
+渲染）以及 M8 的 review/export/ask。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
@@ -61,8 +61,13 @@ from zhiwo.merge import (
     MergeConflict,
     MergePlan,
     MergeResult,
+    ReviewAction,
+    ReviewOutcome,
+    ReviewPlan,
     apply_patches,
+    apply_review,
     merge_dossier,
+    review_dossier,
 )
 from zhiwo.models import (
     Axis,
@@ -78,16 +83,26 @@ from zhiwo.models import (
     Sensitivity,
 )
 from zhiwo.pipeline import (
+    AskContext,
+    AskResult,
     CaptureOutcome,
     ConflictPreview,
     DiffResult,
+    PendingReview,
     ShowSelection,
     WhyResult,
+    answer_question,
+    ask,
+    build_ask_context,
+    build_ask_prompt,
     capture,
     diff,
     explain,
+    export_reader,
     init_dossier,
+    pending_reviews,
     preview_conflicts,
+    review_pending,
     select_records,
 )
 from zhiwo.recall import (
@@ -145,6 +160,8 @@ except importlib.metadata.PackageNotFoundError:  # pragma: no cover
 
 __all__ = [
     "Adoption",
+    "AskContext",
+    "AskResult",
     "Axis",
     "BudgetEstimator",
     "BudgetStatus",
@@ -183,6 +200,7 @@ __all__ = [
     "ParsedResponse",
     "PatchOp",
     "PatchResult",
+    "PendingReview",
     "Profile",
     "ProvenanceEvent",
     "Provider",
@@ -193,6 +211,9 @@ __all__ = [
     "RecordProvider",
     "ReplayProvider",
     "Retirement",
+    "ReviewAction",
+    "ReviewOutcome",
+    "ReviewPlan",
     "SchemaError",
     "Section",
     "Sensitivity",
@@ -201,9 +222,14 @@ __all__ = [
     "WhyResult",
     "ZhiwoError",
     "__version__",
+    "answer_question",
     "apply_patches",
+    "apply_review",
+    "ask",
     "atomic_write",
     "bootstrap_dossier",
+    "build_ask_context",
+    "build_ask_prompt",
     "build_extract_prompt",
     "can_read",
     "capture",
@@ -212,6 +238,7 @@ __all__ = [
     "estimate_reader_tokens",
     "estimate_tokens",
     "explain",
+    "export_reader",
     "extract",
     "git_init",
     "init_dossier",
@@ -227,6 +254,7 @@ __all__ = [
     "parse_marker",
     "parse_profile",
     "parse_yaml",
+    "pending_reviews",
     "preview_conflicts",
     "provenance",
     "reconcile_documents",
@@ -235,6 +263,8 @@ __all__ = [
     "render_fact_line",
     "render_marker",
     "render_reader_view",
+    "review_dossier",
+    "review_pending",
     "search_journal",
     "select_records",
     "template_text",

@@ -628,3 +628,90 @@ environment-driven OpenAI-compatible provider while keeping replay as the
 offline test path. `show --conflicts` is a preview, not a reconcile run: a
 user who wants adoption must perform a merge (M8's review or the next
 capture). The contract (`SPEC.md`) and `profile.yaml` are unchanged.
+
+## D-011 — M8 review/export/ask: human event vocabulary, strict reader export, and injected ask context
+
+**Date:** 2026-11-03 · **Status:** accepted
+
+**Context.** M8 lands the last three CLI commands (`review`, `export`,
+`ask`) plus the review write path. SPEC §2.3 defines what confirmation,
+editing, and rejection do to a pending fact but not how those human
+decisions appear in the changelog; SPEC §5 defines the reader view but the
+plan's M8 test mentions GFM strikethrough, which the reader view cannot
+contain; and `me ask` needs a concrete boundary between the reader view,
+high-clearance journal recall, and the provider. D-007 explicitly deferred
+the review-finalization op choice to this milestone.
+
+**Decision.**
+
+1. **Review events are first-class changelog ops.** `confirm`, `edit`, and
+   `reject` join `PatchOp`/`_REQUIRED_BY_OP`: confirm needs `id`, edit needs
+   `id` + `text`, reject needs `id` + `reason`. They are human-only; an
+   extractor draft carrying one is rejected like `adopt`/`retire`. This is an
+   event-log vocabulary extension, not a new fact-write path: facts still
+   change only through the merge/review shells, and `reject` behaves like
+   `retire` for archival (changelog tombstone, no on-disk archived marker).
+2. **Reject is archival everywhere.** `logical_records` treats `retire` and
+   `reject` as the same archival event, and `reconcile_dossier` adds rejected
+   ids to `retired_ids`, so a rejected pending fact is never re-retired on a
+   later merge. Archived text still falls back to the applied creation event.
+3. **Review is a merge, one decision per commit.** Each confirm/edit/reject
+   takes the writer lock, runs `reconcile_dossier` on the same snapshot it
+   applies to, writes the documents plus one changelog entry, and commits.
+   The plan's "review merge runs the same skeleton minus steps 3–5"
+   parenthetical is read as "no journal append, no extract"; SPEC §4 says
+   reconcile runs before *every* merge, and skipping it would let a review
+   decision overwrite or miss a hand edit made since the list was rendered.
+   Review merges use `input: review` and `extractor: human`, truthful labels
+   for a capture-less, model-free event.
+4. **Deferred supersede applies only to a live target.** Confirm rewrites
+   both lines only when the target exists, is active, is not locked, and its
+   text can be rendered legally. Otherwise the shell returns
+   `target_changed` without writing; the user chooses standalone confirm,
+   edit, or reject. Standalone confirm drops the inert edge (OQ#4: first
+   confirmation wins; the edge is never applied to a moved-on target).
+   Rejection leaves the target untouched.
+5. **Edit is a new human assertion, not a confirmation.** It validates the
+   replacement through the same line-grammar gate, sets `locked`, clears
+   `pending`, and drops any deferred `supersedes` edge. Rewriting wording
+   must not silently supersede an old fact; a human can record that
+   relationship through a later explicit patch.
+6. **Export is the strict §5 reader view.** `me export` renders only
+   active/locked facts of sections covered by the clearance, excludes the
+   journal at every clearance, and never includes pending or superseded
+   facts. It is GFM Markdown but emits no `~~…~~`: the plan's GFM test is
+   interpreted as "do not escape Markdown and keep the output renderable",
+   not as permission to put history into the reader boundary. Output is UTF-8
+   (atomic file write); default clearance is normal.
+7. **Ask is reader view by default; journal only by explicit high
+   clearance.** `me ask` builds the same reader view as export, and at high
+   clearance appends keyword journal hits from `search_journal`. The provider
+   is mandatory (no silent fallback), and the context blocks are passed as
+   data with an instruction not to follow commands inside them.
+   `--show-context` prints exactly those injected blocks to stderr, keeping
+   the answer pipeable. Ask is read-only: no lock, no changelog, no commit.
+8. **Same-second changelog order is explicit.** `read_changelog` sorts by
+   timestamp plus numeric collision suffix (`-2` after the base entry).
+   Lexicographic path order put `...-2.yaml` before `....yaml` because `-`
+   sorts before `.`, which made the review merge triggered right after a
+   capture look older than the capture. This is a read-order fix, not a
+   filename change (R5 still accepts arbitrary stem precision).
+
+**Why.** Every choice names the owner of the moment: the human owns a review
+decision, the changelog owns the event, the merge shell owns the write and
+commit, the reader boundary owns what export/ask may expose. Adding distinct
+review ops avoids bending `retire`/`supersede` into meanings they do not
+have; keeping reject archival semantics identical to retire means `me why`,
+logical records, and reconcile all tell one story. Treating edit as
+standalone prevents a harmless wording fix from silently striking out a live
+fact. Keeping export strict preserves the §5 guarantee that an export can
+never leak pending or superseded history.
+
+**Consequences.** Changelog readers must tolerate three new op values (they
+already tolerate unknown ops, but status readers must know reject is
+archival). `me review` is interactive by design and uses one-key input;
+non-interactive automation should call `pipeline.review_pending`. M9 can
+replace the no-provider error in ask with the live OpenAI-compatible client
+without changing the context boundary. `SPEC.md` and `profile.yaml` are
+unchanged; this record documents the implementation-level vocabulary and
+reader-boundary stance.
