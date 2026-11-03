@@ -129,6 +129,25 @@ def test_recall_api_is_re_exported() -> None:
         assert getattr(zhiwo, name) is not None, name
 
 
+def test_pipeline_api_is_re_exported() -> None:
+    """M7 的编排面：CLI 与 MCP server 共用同一组捕获/查询入口。"""
+    for name in (
+        "CaptureOutcome",
+        "ConflictPreview",
+        "DiffResult",
+        "ShowSelection",
+        "WhyResult",
+        "capture",
+        "diff",
+        "explain",
+        "init_dossier",
+        "preview_conflicts",
+        "select_records",
+    ):
+        assert name in zhiwo.__all__, name
+        assert getattr(zhiwo, name) is not None, name
+
+
 def test_the_whole_error_vocabulary_is_re_exported() -> None:
     """异常是层与层之间的 API（errors.py 的模块 docstring）：一个都不能漏。"""
     for name in ("ZhiwoError", "SchemaError", "MergeRefused", "LockHeld", "ProviderError"):

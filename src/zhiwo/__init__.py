@@ -4,9 +4,10 @@
 已落地：L1（schema，M1）、L0（store + factfile，M2）、reconcile
 （SPEC §4 的五种观察 + id 空间，M3）、merge
 （SPEC §3 的唯一写路径：验证 / 分配 id / 应用 / changelog / 提交，M4）、
-extract（L2：prompt + 模型响应解析 + provider 协议/录制回放，M5）与
+extract（L2：prompt + 模型响应解析 + provider 协议/录制回放，M5）、
 recall（L4：core/reader 视图、token 估算、journal 检索、逻辑记录与
-provenance，M6）。
+provenance，M6）与 pipeline/CLI（M7：捕获、init/show/why/diff 的编排与
+渲染）。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
@@ -16,7 +17,8 @@ provenance，M6）。
 分层纪律：``factfile`` 只认字符串，``store`` 是唯一碰磁盘的模块，
 ``models`` 零 I/O——换存储后端只需动 ``store.py``；``reconcile``
 是纯扫描（D-006），读档案走 ``store``、改文档走内存、落盘归调用方；
-``merge`` 的纯核心同样零 I/O，只有薄壳在调用方持锁时写盘与提交。
+``merge`` 的纯核心同样零 I/O，只有薄壳在调用方持锁时写盘与提交；
+``pipeline`` 拥有步骤顺序与锁，``cli`` 只解析参数和渲染结果。
 """
 
 import importlib.metadata
@@ -74,6 +76,19 @@ from zhiwo.models import (
     Profile,
     Section,
     Sensitivity,
+)
+from zhiwo.pipeline import (
+    CaptureOutcome,
+    ConflictPreview,
+    DiffResult,
+    ShowSelection,
+    WhyResult,
+    capture,
+    diff,
+    explain,
+    init_dossier,
+    preview_conflicts,
+    select_records,
 )
 from zhiwo.recall import (
     FactRecord,
@@ -134,10 +149,13 @@ __all__ = [
     "BudgetEstimator",
     "BudgetStatus",
     "Capture",
+    "CaptureOutcome",
     "ChangelogEntry",
     "ChangelogPatch",
     "Clearance",
     "Conflict",
+    "ConflictPreview",
+    "DiffResult",
     "Dossier",
     "DossierNotFound",
     "ExtractResult",
@@ -178,7 +196,9 @@ __all__ = [
     "SchemaError",
     "Section",
     "Sensitivity",
+    "ShowSelection",
     "SourceLine",
+    "WhyResult",
     "ZhiwoError",
     "__version__",
     "apply_patches",
@@ -186,11 +206,15 @@ __all__ = [
     "bootstrap_dossier",
     "build_extract_prompt",
     "can_read",
+    "capture",
     "check_fact_text",
+    "diff",
     "estimate_reader_tokens",
     "estimate_tokens",
+    "explain",
     "extract",
     "git_init",
+    "init_dossier",
     "load_documents",
     "load_profile",
     "logical_records",
@@ -203,6 +227,7 @@ __all__ = [
     "parse_marker",
     "parse_profile",
     "parse_yaml",
+    "preview_conflicts",
     "provenance",
     "reconcile_documents",
     "reconcile_dossier",
@@ -211,5 +236,6 @@ __all__ = [
     "render_marker",
     "render_reader_view",
     "search_journal",
+    "select_records",
     "template_text",
 ]
