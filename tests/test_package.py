@@ -92,10 +92,11 @@ def test_merge_api_is_re_exported() -> None:
 
 
 def test_extract_and_provider_api_is_re_exported() -> None:
-    """M5 的 L2 面：CLI/pipeline 从顶层取 extract 与 provider 替身。"""
+    """M5/M9 的 L2 面：CLI/pipeline 从顶层取 extract 与 provider 实现。"""
     for name in (
         "ExtractResult",
         "MockProvider",
+        "OpenAICompatibleProvider",
         "ParsedResponse",
         "Provider",
         "RecordProvider",
@@ -103,6 +104,7 @@ def test_extract_and_provider_api_is_re_exported() -> None:
         "build_extract_prompt",
         "extract",
         "parse_extract_response",
+        "provider_from_env",
     ):
         assert name in zhiwo.__all__, name
         assert getattr(zhiwo, name) is not None, name

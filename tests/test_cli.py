@@ -195,6 +195,58 @@ def test_cli_e2e_with_replay(tmp_path: Path, git_identity: None) -> None:
     assert _commit_count(root) == 1
 
 
+def test_cli_uses_the_environment_provider_when_no_replay_is_given(
+    tmp_path: Path, git_identity: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M9：没有 --replay 时，ME_LLM_* 解析出的真实 provider 接入捕获。"""
+    root = bootstrap_dossier(tmp_path / "me").root
+    provider = MockProvider(REPLAY_RESPONSE, identity="mock-env")
+    monkeypatch.setattr("zhiwo.cli.provider_from_env", lambda: provider)
+
+    result = CliRunner().invoke(
+        cli,
+        ["--dossier", str(root), CAPTURE],
+        obj=AppContext(now=FIXED),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "applied  2" in result.output
+    changelog = next((root / "changelog").glob("*.yaml")).read_text(encoding="utf-8")
+    assert "extractor: mock-env" in changelog
+
+
+def test_replay_takes_precedence_over_the_environment_provider(
+    tmp_path: Path, git_identity: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """离线回放必须压过开发机上的真实端点：测试和演示不能被网络接管。"""
+    root = bootstrap_dossier(tmp_path / "me").root
+    replay = _record_replay(tmp_path / "replay.jsonl", root)
+
+    def unexpected() -> None:
+        pytest.fail("provider_from_env must not be consulted when --replay is given")
+
+    monkeypatch.setattr("zhiwo.cli.provider_from_env", unexpected)
+
+    result = CliRunner().invoke(cli, ["--dossier", str(root), "--replay", str(replay), CAPTURE])
+
+    assert result.exit_code == 0, result.output
+    assert "applied  2" in result.output
+
+
+def test_partial_environment_configuration_fails_before_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """配错的 ME_LLM_* 是设置错误：响亮失败，不伪装成 journal-only 降级。"""
+    root = bootstrap_dossier(tmp_path / "me").root
+    monkeypatch.setenv("ME_LLM_BASE_URL", "http://host/v1")
+
+    result = CliRunner().invoke(cli, ["--dossier", str(root), CAPTURE])
+
+    assert result.exit_code != 0
+    assert "ME_LLM_MODEL" in result.output
+    assert not list((root / "journal").glob("*.md"))
+
+
 def test_provider_failure_still_commits_the_journal(tmp_path: Path, git_identity: None) -> None:
     """provider 失败不是回滚信号：journal 已持久，必须继续走完 merge。"""
     root = bootstrap_dossier(tmp_path / "me").root
