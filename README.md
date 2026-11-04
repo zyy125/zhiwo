@@ -56,29 +56,64 @@ At night you ask any AI a question, and for the first time the answer begins: *"
 
 That's not "people in general" anymore. That's you.
 
-## Status: contract first, code second
+## Quickstart
 
-Nothing here runs yet — deliberately. This repository currently contains:
+Requires Python ≥3.11 and [uv](https://docs.astral.sh/uv/).
 
-- [README.zh.md](README.zh.md) — the full philosophy, in Chinese
+```bash
+uv sync
+uv run me init                    # creates ~/.me
+uv run me --dossier PATH init     # or choose a directory explicitly
+```
+
+Point it at any OpenAI-compatible endpoint. `ME_LLM_BASE_URL` and
+`ME_LLM_API_KEY` are optional: omit the key for local ollama/vLLM servers,
+omit the base URL to use the official OpenAI endpoint.
+
+```bash
+export ME_LLM_MODEL=gpt-4o-mini
+export ME_LLM_API_KEY=sk-...   # optional for local endpoints
+export ME_LLM_BASE_URL=https://api.openai.com/v1   # the default
+
+uv run me "面试挂了，二面，反馈说项目深度不够。"
+uv run me review               # confirm / edit / reject pending inferences
+uv run me ask "我接下来该补什么？"
+uv run me export -o reader.md  # what an AI is allowed to read
+```
+
+`me` always commits the journal first. If the model is unreachable or returns
+malformed output, the capture is still saved and the failure is reported —
+recording never blocks. Offline tests and demos can use a recorded provider
+with `me --replay FILE`.
+
+The 8 v0.2 commands are `me "<text>"`, `me init`, `me show`, `me why`,
+`me review`, `me diff`, `me export`, and `me ask`.
+
+## Status: v0.2 MVP
+
+The v0.2 milestone is implemented and tested:
+
 - [SPEC.md](SPEC.md) — the data contract, v0.2-draft: the fact model, the directory layout, the merge rules. The SPEC is versioned on its own line (review guide at the bottom).
 - [examples/me/](examples/me/) — a synthetic sample dossier demonstrating the format
-- [docs/prior-art.md](docs/prior-art.md) — a survey of the closest existing projects, and what this design does that they don't
-- [docs/decisions.md](docs/decisions.md) — dated records of decisions that are not part of the contract (D-001: editor integration deferred, id format unchanged)
+- `src/zhiwo/` — L0 store, L1 schema, L2 extract (with mock/replay/OpenAI-compatible providers), L3 merge, L4 recall, and the `me` CLI
+- [docs/plan-v0.2.md](docs/plan-v0.2.md) — scope, locked choices, and milestone breakdown
+- [docs/decisions.md](docs/decisions.md) — dated records of decisions that are not part of the contract
 
-We are building the contract before the code, because in this product **the schema is the hard part**. If you find a flaw in the SPEC, you've contributed more than a hundred lines of code ever could. **Issues welcome — harsh ones especially.**
+The contract remains the hard part. If you find a flaw in the SPEC, you've
+contributed more than a hundred lines of code ever could. **Issues welcome —
+harsh ones especially.**
 
 ## Roadmap
 
-- [x] v0.1 — philosophy + data contract (this)
-- [ ] v0.2 — MVP CLI: `me`, `me ask`, `me export` (store / extract / merge)
+- [x] v0.1 — philosophy + data contract
+- [x] v0.2 — MVP CLI: capture / review / export / ask (store, extract, merge, recall)
 - [ ] v0.3 — MCP server: Claude Desktop, Cursor, and any MCP client read your dossier
 - [ ] v0.4 — importers (calendar, chat logs, health exports) for cold-start
 - [ ] v0.5 — distillation: journal → portrait, under an enforced token budget
 
 ## Contributing
 
-Right now the most valuable contribution is **critique of [SPEC.md](SPEC.md)** — especially the fact model and conflict handling. Once v0.2 lands, importers become self-contained good-first-issues.
+Right now the most valuable contribution is **critique of [SPEC.md](SPEC.md)** — especially the fact model and conflict handling. Importers (v0.4) are self-contained good-first-issues.
 
 ## License
 

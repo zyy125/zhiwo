@@ -715,3 +715,86 @@ replace the no-provider error in ask with the live OpenAI-compatible client
 without changing the context boundary. `SPEC.md` and `profile.yaml` are
 unchanged; this record documents the implementation-level vocabulary and
 reader-boundary stance.
+
+## D-012 — M9 live provider: environment matrix, truthful identity, and journal-first transport failures
+
+**Date:** 2026-11-04 · **Status:** accepted
+
+**Context.** M9 adds the real OpenAI-compatible client behind the `Provider`
+protocol (D-008), replaces the "offline only" default in the CLI (D-010), and
+closes the v0.2 milestone. The plan fixes the transport (`httpx`,
+`{base_url}/chat/completions`) but not the configuration surface: which
+environment variables exist, what partial configuration means, how a live
+provider is identified in the changelog, and which failures may degrade to a
+journal-only capture.
+
+**Decision.**
+
+1. **Configuration uses three `ME_LLM_*` variables.** `ME_LLM_MODEL` names
+   the model, `ME_LLM_BASE_URL` the endpoint (default
+   `https://api.openai.com/v1`), and `ME_LLM_API_KEY` an optional Bearer
+   token. The project prefix avoids colliding with vendor SDK variables that
+   may point at a different account on the same machine. Empty or
+   whitespace-only values count as unset.
+2. **The matrix distinguishes "not configured" from "misconfigured."** All
+   three blank returns `None`, which keeps the capture path's journal-only
+   degradation (D-010). A model alone is a valid configuration (official
+   endpoint, no auth), as is model plus base URL (local endpoint). Any
+   partial configuration that omits the model raises `ZhiwoError` naming
+   `ME_LLM_MODEL`; silently treating a typo as "no provider" would make
+   extraction disappear without anyone noticing. A non-empty base URL must
+   also be an absolute `http(s)` URL with a host; a schemeless value is a
+   setup typo, not a transport failure after the journal append.
+3. **Precedence is test injection > `--replay` > environment > journal-only.**
+   Explicitly injected providers and recordings must never be displaced by a
+   developer's exported live endpoint. `me ask` still requires a provider;
+   its error now names the environment variables instead of promising M9.
+4. **The changelog identity is `openai-compatible:<model>`.** It is stable,
+   non-empty, and carries the model/version string users already chose. The
+   adapter does not append a timestamp, hostname, or endpoint: provenance
+   must be repeatable, and the base URL can contain environment-specific
+   detail that does not belong in a fact's audit trail.
+5. **Transport and envelope failures are `ProviderError`; configuration
+   failures are `ZhiwoError`.** Network errors, any status outside 200–299
+   (including redirects), invalid JSON, and a missing
+   `choices[0].message.content` string all become `ProviderError`, so capture
+   keeps its journal-first guarantee (iron rule 2, D-008). Bad constructor
+   input (empty model, empty or non-http(s) base URL, non-positive timeout)
+   is a setup error and fails before capture starts, consistent with the
+   existing invalid-`--replay` behavior: deterministic mistakes are fixed and
+   retried, whereas transient model failures must never eat the capture.
+6. **One short-lived `httpx.Client` per call, 60-second per-phase timeout.**
+   The CLI issues at most one request per invocation, so a connection pool is
+   unnecessary surface. The timeout is a constructor parameter for tests but
+   is deliberately not another environment variable in v0.2. API keys are
+   only placed in the request header; error messages include the URL, status,
+   and a truncated response body, with the key redacted even if a proxy
+   echoes it.
+7. **The live smoke test is opt-in and observation-only.** `tests/test_live_smoke.py`
+   carries the `live` marker, is excluded by the default pytest selection
+   (`-m "not live"`), and additionally skips unless `ME_LLM_LIVE_SMOKE=1`;
+   CI never opts in. It checks connectivity, runs one CJK capture, and
+   prints applied/rejected/evidence-rejection counts — the live data R1 says
+   tunes evidence strictness. It does not assert that the model extracted a
+   particular fact, so a valid "nothing durable" response does not fail the
+   build.
+8. **README quickstart and version 0.2.0 ship with this record.** Both
+   READMEs replace "nothing runs yet" with the setup/commands above and mark
+   v0.2 complete. The version bump is the release marker; creating the git
+   tag remains a separate, explicitly requested step.
+
+**Why.** The provider is the one crack in the system (AGENTS.md), so its
+configuration must be boring and explicit. Distinguishing unconfigured from
+misconfigured keeps the iron-rule degradation honest without swallowing
+typos; keeping transport failures inside `ProviderError` preserves the
+journal-first promise; and a model-only identity keeps `me why` readable.
+Failures are separated by who can fix them: the user fixes configuration, the
+network or endpoint fixes transport.
+
+**Consequences.** `httpx` becomes a runtime dependency. Captures made with a
+live model record `openai-compatible:<model>` in the changelog, so switching
+endpoints without changing the model is invisible in provenance — an accepted
+v0.2 simplification. A malformed `ME_LLM_*` configuration prevents that
+capture from being journaled at all; the error is immediate and retryable,
+unlike a network failure after the journal append. `SPEC.md` and
+`profile.yaml` are unchanged.
