@@ -67,21 +67,55 @@
 
 而我把它握在自己手里，决定让哪个 AI、在什么时刻、读到哪一部分。
 
-## 当前状态：先契约，后代码
+## 快速开始
 
-这个仓库现在没有任何能跑的代码——这是刻意的。先公开的是产品哲学和数据契约：
+需要 Python ≥3.11 和 [uv](https://docs.astral.sh/uv/)。
+
+```bash
+uv sync
+uv run me init                    # 默认创建 ~/.me
+uv run me --dossier PATH init     # 或显式指定目录
+```
+
+把它指向任何 OpenAI-compatible 端点。`ME_LLM_BASE_URL` 与
+`ME_LLM_API_KEY` 都是可选的：本地 ollama/vLLM 可以不设 key；不设 base URL
+则使用 OpenAI 官方端点。
+
+```bash
+export ME_LLM_MODEL=gpt-4o-mini
+export ME_LLM_API_KEY=sk-...   # 本地端点可省略
+export ME_LLM_BASE_URL=https://api.openai.com/v1   # 默认值
+
+uv run me "面试挂了，二面，反馈说项目深度不够。"
+uv run me review               # 逐条确认 / 编辑 / 拒绝待定推断
+uv run me ask "我接下来该补什么？"
+uv run me export -o reader.md  # AI 被允许读到的那部分
+```
+
+`me` 永远先把 journal 落盘提交。模型不可达或返回畸形输出时，这次捕获
+依然被保存，失败会如实报告——记录永不阻塞。离线测试与演示可以用
+`me --replay FILE` 回放录制好的 provider 响应。
+
+v0.2 的 8 个入口：`me "<text>"`、`me init`、`me show`、`me why`、
+`me review`、`me diff`、`me export`、`me ask`。
+
+## 当前状态：v0.2 MVP
+
+v0.2 里程碑已经实现并有测试覆盖：
 
 - [SPEC.md](SPEC.md) —— 数据契约 v0.2-draft：事实模型、目录结构、写入规则。SPEC 有自己的版本线（见文末 review guide）。
 - [examples/me/](examples/me/) —— 一份合成数据的示例档案
-- [docs/prior-art.md](docs/prior-art.md) —— 对最接近的现有项目的调研，以及这个设计做到了、它们没做到的事
-- [docs/decisions.md](docs/decisions.md) —— 不属于契约的决策记录（D-001：暂不做编辑器集成，id 格式不变）
+- `src/zhiwo/` —— L0 store、L1 schema、L2 extract（mock/replay/OpenAI-compatible provider）、L3 merge、L4 recall 与 `me` CLI
+- [docs/plan-v0.2.md](docs/plan-v0.2.md) —— 范围、锁定决策与里程碑拆分
+- [docs/decisions.md](docs/decisions.md) —— 不属于契约的决策记录
 
-**schema 是这个产品最难的部分，代码只是它的实现。** 如果你发现 SPEC 有漏洞，你的贡献比一百行代码更大。欢迎提 issue——尤其是拍砖的。
+**schema 仍然是这个产品最难的部分。** 如果你发现 SPEC 有漏洞，你的贡献比
+一百行代码更大。欢迎提 issue——尤其是拍砖的。
 
 ## 路线图
 
-- [x] v0.1 —— 哲学 + 数据契约（现在）
-- [ ] v0.2 —— MVP CLI：`me`、`me ask`、`me export`
+- [x] v0.1 —— 哲学 + 数据契约
+- [x] v0.2 —— MVP CLI：capture / review / export / ask（store、extract、merge、recall）
 - [ ] v0.3 —— MCP server：Claude Desktop、Cursor 等任意 MCP 客户端直接读档案
 - [ ] v0.4 —— 导入器（日历、聊天记录、健康数据），解决冷启动
 - [ ] v0.5 —— 蒸馏：流水 → 画像，带强制 token 预算

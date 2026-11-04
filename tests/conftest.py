@@ -16,10 +16,25 @@ from pathlib import Path
 
 import pytest
 
+from zhiwo.llm.openai import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV
 from zhiwo.store import Dossier, git_init
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO_ROOT / "examples" / "me"
+
+
+@pytest.fixture(autouse=True)
+def clean_llm_env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """清掉开发机上的真实 provider 配置，保证测试默认是离线的。
+
+    ``provider_from_env`` 会读进程环境；如果开发者恰好导出了 ME_LLM_*，
+    "没有配置 provider"的断言就会变成对真实端点的调用。``live`` 标记的
+    测试是唯一例外——它存在的目的就是读取这些变量并发起网络请求。
+    """
+    if request.node.get_closest_marker("live") is not None:
+        return
+    for name in (BASE_URL_ENV, API_KEY_ENV, MODEL_ENV):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

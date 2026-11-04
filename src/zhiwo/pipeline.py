@@ -70,7 +70,7 @@ _NO_PROVIDER_IDENTITY = "none"
 
 _NO_PROVIDER_DIAGNOSTIC = (
     "no LLM provider configured; the journal capture is committed but nothing "
-    "was extracted (v0.2 CLI ships offline replay only; live providers land in M9)"
+    "was extracted (set ME_LLM_MODEL for a live provider, or pass --replay FILE)"
 )
 
 

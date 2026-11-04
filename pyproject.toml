@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zhiwo"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "Zhiwo (知我) — a local-first personal dossier any authorized AI reads as context"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "click>=8.1,<9",
+    "httpx>=0.27,<1",
     "pydantic>=2.7,<3",
     "PyYAML>=6.0.1",
     "wcwidth>=0.2,<1",
@@ -65,4 +66,11 @@ warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+# live 测试默认不进入选择集：即使开发机导出了 ME_LLM_LIVE_SMOKE=1，
+# 普通 pytest 也不会联网。显式 -m live 才把它选回来（D-012）。
+addopts = '-ra --strict-markers -m "not live"'
+markers = [
+    # 真实网络冒烟：需要 -m live 与 ME_LLM_LIVE_SMOKE=1 同时满足才连接
+    # 模型端点（D-012）。
+    "live: opt-in network smoke test against an OpenAI-compatible endpoint",
+]

@@ -7,7 +7,8 @@
 extract（L2：prompt + 模型响应解析 + provider 协议/录制回放，M5）、
 recall（L4：core/reader 视图、token 估算、journal 检索、逻辑记录与
 provenance，M6）、pipeline/CLI（M7：捕获、init/show/why/diff 的编排与
-渲染）以及 M8 的 review/export/ask。
+渲染）、M8 的 review/export/ask，以及 M9 的 OpenAI-compatible 真实
+provider（环境变量配置，仍走同一个 ``Provider`` 协议）。
 
 公开 API 在这里再导出一次，作为层的门面：后续里程碑（CLI、MCP server）
 从 ``zhiwo`` 顶层取用，而不是各自记住 ``zhiwo.models`` /
@@ -52,7 +53,14 @@ from zhiwo.factfile import (
     render_fact_line,
     render_marker,
 )
-from zhiwo.llm import MockProvider, Provider, RecordProvider, ReplayProvider
+from zhiwo.llm import (
+    MockProvider,
+    OpenAICompatibleProvider,
+    Provider,
+    RecordProvider,
+    ReplayProvider,
+    provider_from_env,
+)
 from zhiwo.merge import (
     BudgetEstimator,
     BudgetStatus,
@@ -197,6 +205,7 @@ __all__ = [
     "MergeRefused",
     "MergeResult",
     "MockProvider",
+    "OpenAICompatibleProvider",
     "ParsedResponse",
     "PatchOp",
     "PatchResult",
@@ -257,6 +266,7 @@ __all__ = [
     "pending_reviews",
     "preview_conflicts",
     "provenance",
+    "provider_from_env",
     "reconcile_documents",
     "reconcile_dossier",
     "render_core_view",

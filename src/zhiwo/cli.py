@@ -18,6 +18,9 @@ M8 补齐另外三个入口：``me review``（逐条确认/编辑/拒绝 pending
 ``me export``（reader view 导出）与 ``me ask``（把 reader view 注入模型
 回答问题）。它们与捕获一样只做渲染；锁、reconcile、写盘与提交仍在
 ``pipeline`` / ``merge`` 里。
+
+M9 不新增命令，只把 provider 解析链延长为"注入 > ``--replay`` >
+ME_LLM_* 环境配置 > journal-only 降级"。
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from wcwidth import wcswidth
 
 from zhiwo import __version__
 from zhiwo.errors import ZhiwoError
-from zhiwo.llm import Provider, ReplayProvider
+from zhiwo.llm import Provider, ReplayProvider, provider_from_env
 from zhiwo.merge import MergeResult, ReviewAction, ReviewOutcome
 from zhiwo.models import ChangelogPatch, Clearance, PatchOp
 from zhiwo.pipeline import (
@@ -67,7 +70,8 @@ class AppContext:
     ``provider_explicit`` 区分"没有配置 provider"与"明确选择不提取"：
     前者应落到降级提示，后者（测试注入 ``None``）同样降级，但不再尝试
     ``--replay``。测试通过 ``CliRunner.invoke(..., obj=AppContext(...))``
-    注入 provider，生产路径则由 ``--replay`` 构造。
+    注入 provider，生产路径则按 ``--replay`` 或 ME_LLM_* 环境变量构造
+    （M9）。
     """
 
     dossier: Path | None = None
@@ -367,26 +371,31 @@ def _dossier(app: AppContext) -> Dossier:
 
 
 def _provider(app: AppContext) -> Provider | None:
-    """解析 provider：测试注入 > ``--replay`` > 无（journal-only 降级）。
+    """解析 provider：测试注入 > ``--replay`` > ME_LLM_* > 无降级。
 
-    真实网络客户端与 provider 环境变量矩阵属 M9；M7 唯一可用的 provider
-    是离线回放。没有 provider 不是错误——capture 仍会提交 journal，并在
-    摘要里明确告诉用户"这次没有提取"。
+    显式注入与回放优先于环境配置，保证测试和离线演示不被开发机上的
+    真实端点意外接管。真实 provider 的构造错误（如只设了 base_url 却
+    没有 model）是 ``ZhiwoError``：用户显然在尝试配置，静默当成"没配"
+    会让一次环境变量 typo 永远不被发现。没有配置不是错误——capture 仍会
+    提交 journal，并在摘要里明确告诉用户"这次没有提取"。
     """
     if app.provider_explicit:
         return app.provider
     if app.replay is not None:
         return ReplayProvider(app.replay)
-    return None
+    return provider_from_env()
 
 
 def _require_provider(app: AppContext) -> Provider:
     """``me ask`` 必须有 provider：没有答案时不能伪装成成功。"""
-    provider = _provider(app)
+    try:
+        provider = _provider(app)
+    except ZhiwoError as exc:
+        raise click.ClickException(str(exc)) from exc
     if provider is None:
         raise click.ClickException(
             "no LLM provider configured; `me ask` needs a provider "
-            "(use --replay FILE; live providers land in M9)"
+            "(set ME_LLM_MODEL for a live endpoint, or pass --replay FILE)"
         )
     return provider
 
